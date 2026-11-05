@@ -1,0 +1,173 @@
+# Real-world test questions for the iPhone manuals corpus (data/manuals/*.pdf, see eval/SOURCES.md).
+# pages are 1-based PHYSICAL PDF pages; for iphone_user_guide.pdf these equal the printed page numbers.
+# doc/hybrid keywords are verified against the page text by eval/check_questions.py.
+# web-question keywords are a snapshot of 2026-11-06 and will go stale; knowledge/web keywords are not page-checked.
+
+# ---- doc: iPhone User Guide (iOS 8.4), early -> late pages ----
+- id: ug_wifi
+  question: How do I connect my iPhone to a Wi-Fi network?
+  category: doc
+  expected_tiers: [rag, hybrid]
+  doc: iphone_user_guide.pdf
+  pages: [16]
+  keywords: ["Settings > Wi-Fi", "Choose a network"]
+
+- id: ug_control_center
+  question: How do I open Control Center on my iPhone?
+  category: doc
+  expected_tiers: [rag, hybrid]
+  doc: iphone_user_guide.pdf
+  pages: [35]
+  keywords: ["Open Control Center", "bottom edge"]
+
+- id: ug_lost_iphone
+  question: I lost my iPhone, what can Find My iPhone do to help me?
+  category: doc
+  expected_tiers: [rag, hybrid]
+  doc: iphone_user_guide.pdf
+  pages: [46]
+  keywords: ["Lost Mode", "Play Sound", "Erase iPhone"]
+
+- id: ug_burst
+  question: How do I take burst photos with the iPhone camera?
+  category: doc
+  expected_tiers: [rag, hybrid]
+  doc: iphone_user_guide.pdf
+  pages: [94]
+  keywords: ["Burst", "Take Picture button"]
+
+- id: ug_screenshot
+  question: How do I take a screenshot of what is on my iPhone screen?
+  category: doc
+  # The guide (iOS 8.4) only covers Home-button iPhones; the indexed repair manual is iPhone 16 (no Home button),
+  # so also fetching the current method from the web is correct. The guide page must still be cited.
+  expected_tiers: [rag, hybrid, web]
+  doc: iphone_user_guide.pdf
+  pages: [96]
+  keywords: ["screenshot", "Home buttons"]
+
+- id: ug_force_restart
+  question: How do I force restart my iPhone when it will not turn off?
+  category: doc
+  # The guide (iOS 8.4) only covers Home-button iPhones; the indexed repair manual is iPhone 16 (no Home button),
+  # so also fetching the current method from the web is correct. The guide page must still be cited.
+  expected_tiers: [rag, hybrid, web]
+  doc: iphone_user_guide.pdf
+  pages: [187]
+  keywords: ["Reset iPhone", "Home button", "ten seconds"]
+
+# ---- doc: iPhone 16 Repair Manual, early -> late pages ----
+- id: rm_thermal_event
+  question: What should I do if the battery starts smoking or has a thermal event while I am repairing an iPhone?
+  category: doc
+  expected_tiers: [rag, hybrid]
+  doc: iphone_16_repair_manual.pdf
+  pages: [5]
+  keywords: ["thermal event", "clean, dry sand", "30 minutes"]
+
+- id: rm_broken_glass
+  question: What protective gear do I need before repairing an iPhone with a broken display glass?
+  category: doc
+  expected_tiers: [rag, hybrid]
+  doc: iphone_16_repair_manual.pdf
+  pages: [7]
+  keywords: ["cut-resistant gloves", "safety glasses", "ESD-safe vacuum"]
+
+- id: rm_diagnostics_requirements
+  question: What do I need to run Apple Diagnostics for Self Service Repair on an iPhone?
+  category: doc
+  expected_tiers: [rag, hybrid]
+  doc: iphone_16_repair_manual.pdf
+  pages: [21]
+  keywords: ["iPhone 12 or later", "iOS 17"]
+
+- id: rm_reuse_screws
+  question: Can I reuse the old screws when I put an iPhone back together?
+  category: doc
+  expected_tiers: [rag, hybrid]
+  doc: iphone_16_repair_manual.pdf
+  pages: [73]
+  keywords: ["Never reinstall a screw", "new screws"]
+
+- id: rm_flex_cable_bend
+  question: How far may I bend back the flex cables when removing the USB-C connector from the iPhone 16?
+  category: doc
+  expected_tiers: [rag, hybrid]
+  doc: iphone_16_repair_manual.pdf
+  pages: [200]
+  keywords: ["90 degrees", "flex cables"]
+
+# ---- hybrid: exact part numbers / technical terms from the repair manual ----
+- id: rm_part_blue_torque_driver
+  question: What is the part number of the blue torque driver (0.65 kgf cm) in the iPhone 16 tools list?
+  category: hybrid
+  expected_tiers: [rag, hybrid]
+  doc: iphone_16_repair_manual.pdf
+  pages: [83]
+  keywords: ["923-0448", "blue, 0.65 kgf cm"]
+
+- id: rm_part_grounding_spring_screw
+  question: What is the part number of the grounding spring screw for the iPhone 16?
+  category: hybrid
+  expected_tiers: [rag, hybrid]
+  doc: iphone_16_repair_manual.pdf
+  pages: [75]
+  keywords: ["923-11184", "Grounding spring screw"]
+
+- id: rm_adjustable_torque_range
+  question: What is the torque range of the adjustable torque driver used for screws outlined in black/green?
+  category: hybrid
+  expected_tiers: [rag, hybrid]
+  doc: iphone_16_repair_manual.pdf
+  pages: [75]
+  keywords: ["adjustable torque driver", "34 Ncm"]
+
+# ---- knowledge: general knowledge, not about the manuals ----
+- id: know_usb
+  question: What does USB stand for?
+  category: knowledge
+  expected_tiers: [knowledge]
+  doc: null
+  pages: []
+  keywords: ["Universal Serial Bus"]
+
+- id: know_ram
+  question: What does RAM stand for in a computer?
+  category: knowledge
+  expected_tiers: [knowledge]
+  doc: null
+  pages: []
+  keywords: ["Random Access Memory"]
+
+- id: know_boiling_point
+  question: At what temperature in Celsius does water boil at sea level?
+  category: knowledge
+  expected_tiers: [knowledge]
+  doc: null
+  pages: []
+  keywords: ["100"]
+
+# ---- web: needs fresh info, not in either manual (answers as of 2026-11-06) ----
+- id: web_newest_iphone
+  question: What is the newest iPhone model Apple sells right now?
+  category: web
+  expected_tiers: [web]
+  doc: null
+  pages: []
+  keywords: ["iPhone Duo"]
+
+- id: web_latest_ios
+  question: What is the latest public version of iOS available today?
+  category: web
+  expected_tiers: [web]
+  doc: null
+  pages: []
+  keywords: ["iOS 27"]
+
+- id: web_apple_revenue
+  question: How much revenue did Apple report in its most recent quarterly earnings?
+  category: web
+  expected_tiers: [web]
+  doc: null
+  pages: []
+  keywords: ["114"]

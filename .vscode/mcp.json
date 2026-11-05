@@ -1,0 +1,10 @@
+{
+  "servers": {
+    "adaptive-rag": {
+      "type": "stdio",
+      "command": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "args": ["-m", "src.mcp_server"],
+      "cwd": "${workspaceFolder}"
+    }
+  }
+}

@@ -1,0 +1,30 @@
+# Orchestration + BYOK chat models (init_chat_model)
+langchain~=0.3.27
+langgraph~=0.5.4
+langchain_core~=0.3.72
+pydantic~=2.11.7
+python-dotenv~=1.1.1
+PyYAML~=6.0.2
+
+# Retrieval: PDF pages, local embeddings + cross-encoder reranker (no API key), web search without a key
+pypdf
+fastembed
+numpy
+ddgs
+tavily-python
+requests~=2.32.4
+beautifulsoup4~=4.13.4
+
+# Serving: REST API, UI, MCP server for Claude Code / Antigravity / Copilot
+fastapi
+uvicorn
+python-multipart
+streamlit
+mcp
+
+# Tests
+pytest
+
+# Optional, install only what you use:
+#   BYOK providers: langchain-openai | langchain-anthropic | langchain-google-genai | langchain-groq | langchain-ollama
+#   Persistent chat history in MongoDB (set MONGO_URL): motor

@@ -1,0 +1,67 @@
+# Prompts of src/rag/graph_builder.py, filled with str.format: {name} is a slot, {{ and }} are literal braces.
+# Keep this file ASCII: Config opens it with the platform default encoding (cp1252 on Windows).
+prompts:
+  plan: |
+    You are the planner of a research assistant that answers from its own knowledge, from the user's indexed documents, or from a web search.
+
+    Conversation so far (oldest first):
+    {history}
+
+    Indexed documents:
+    {documents}
+
+    Closest passages in the documents:
+    {snippets}
+
+    New user message: {question}
+
+    1. standalone_question: the new message rewritten to be understandable without the conversation (resolve "it", "that one" and other follow-ups). Unchanged if it already is.
+    2. route, exactly one of:
+       - "knowledge": ONLY if it is not about the indexed documents, not time-sensitive, and you can answer it reliably from general knowledge (greetings, definitions, math, well-established facts).
+       - "documents": it concerns the subject of the indexed documents. Prefer this when unsure.
+       - "web": it needs current or external information and the documents are unrelated.
+    3. answer: the full answer in markdown if route is "knowledge", otherwise "".
+
+    Return only JSON:
+    {{"standalone_question": "...", "reasoning": "one short sentence", "route": "knowledge | documents | web", "answer": ""}}
+
+  judge: |
+    Decide whether the evidence below is enough to answer the question completely and accurately.
+
+    Question: {question}
+
+    Evidence:
+    {evidence}
+
+    Reason step by step: what the relevant sources (by id) say about the question, then what the question asks that no source covers. Sufficient means every part can be answered from this evidence alone, without guessing.
+    A source that states the answer directly is enough: do not hold out for a figure, the same statement repeated in another step, or confirmation from a second source.
+    If not sufficient, write 2-3 search queries for what is missing, best first: rephrase with the wording a manual or web page would use, or split the question into simpler parts.
+
+    Return only JSON:
+    {{"reasoning": "...", "sufficient": true | false, "missing": "what is still needed, or empty", "next_queries": ["...", "..."]}}
+
+  generate: |
+    Answer the question using ONLY the evidence below, never outside knowledge.
+
+    Question: {question}
+
+    Evidence:
+    {evidence}
+
+    Rules:
+    - Write the answer in markdown. Put [n] right after each claim, where n is the number of the citation supporting it (1, 2, 3, ...).
+    - Each citation gives the source id and a quote: the exact words in that source that support the claim, copied character for character (one sentence or phrase, about 5-30 words). Never paraphrase a quote; use "..." only to skip words inside it.
+    - Every [n] in the answer needs a citation, and every citation needs an [n] in the answer.
+    - If the evidence does not answer the question, or only part of it, say so plainly instead of guessing, and still cite what partly helps.
+
+    Return only JSON:
+    {{"answer": "markdown with [n] markers", "citations": [{{"n": 1, "source_id": "doc:12", "quote": "exact words from that source"}}]}}
+
+  regenerate: |
+    Your previous reply failed citation checking:
+    {problems}
+
+    Previous reply:
+    {previous}
+
+    Return a corrected reply in the same JSON format. Copy every quote exactly from its source (or quote another passage, or drop the claim), and make the [n] markers and the citations match one to one.
