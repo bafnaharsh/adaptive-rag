@@ -24,6 +24,8 @@ const ICONS = {
   arrowUp: '<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>',
   dot: '<circle cx="12" cy="12" r="3"/>',
   compass: '<circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  half: '<circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/>',
   sparkle: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15v4"/><path d="M17 17h4"/>',
   book: '<path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"/><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"/>',
 };
@@ -313,9 +315,12 @@ function nextLabel(ev, mode) {
   }
 }
 
-// ---------- narrator view: one plain-language line per finished step ----------
+// ---------- research board: the question's parts, each with the searches that worked on it ----------
 
 const upTo = (items, max) => items.slice(0, max).join(', ') + (items.length > max ? '…' : '');
+const short = (s, n) => (s.length > n ? `${s.slice(0, n).replace(/\s+\S*$/, '')}…` : s);
+const firstWords = (text, n = 10) => { const w = String(text || '').trim().split(/\s+/); return w.slice(0, n).join(' ') + (w.length > n ? '…' : ''); };
+const hue = (s) => [...s].reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 360, 7);
 
 /** The document's description when it is a short title, else its file name without extension and underscores. */
 function docName(file) {
@@ -323,13 +328,8 @@ function docName(file) {
   return d && d.length <= 60 ? d : String(file || 'your documents').replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim();
 }
 
-/** "Found 6 relevant passages in iPhone 16 Repair Manual (pages 5, 28, 85)." */
-function foundIn(hits) {
-  return hits.length ? `Found ${passagesIn(hits)}.` : "Didn't find anything relevant in your documents yet.";
-}
-
-/** "6 relevant passages in iPhone 16 Repair Manual (pages 5, 28, 85)" for a non-empty hit list. */
-function passagesIn(hits) {
+/** "Apple iPhone 16 Repair Manual (pages 41, 42, 98, 123…)" for a non-empty list of document hits. */
+function whereFound(hits) {
   const files = new Map();
   for (const x of hits) {
     const k = x.source || x.label;
@@ -340,72 +340,168 @@ function passagesIn(hits) {
     const pages = [...set].sort((a, b) => a - b);
     return pages.length ? `${docName(file)} (${pages.length > 1 ? 'pages' : 'page'} ${upTo(pages, 4)})` : docName(file);
   });
-  const where = parts.length > 2 ? `${parts.slice(0, 2).join(', ')} and ${parts.length - 2} more` : parts.join(' and ');
-  return `${plural(hits.length, 'relevant passage')} in ${where}`;
+  return parts.length > 2 ? `${parts.slice(0, 2).join(', ')} and ${parts.length - 2} more` : parts.join(' and ');
 }
 
-const webDomains = (hits) => [...new Set(hits.map((x) => x.url).filter((u) => safeUrl(u)).map(domain))];
 
-function beat(iconName, title, parts, state = 'done') {
-  return h('li', { class: `beat beat--${state}` },
-    h('span', { class: 'beat-icon' }, icon(iconName), h('span', { class: 'beat-badge', 'aria-hidden': 'true' }, state === 'warn' ? '!' : icon('check'))),
-    h('p', { class: 'beat-text' }, h('span', { class: 'beat-title' }, title), ' ', parts));
+const keyOf = (x) => x.url || `${x.source}#${x.page}`;
+
+/** One tile per page (documents) or URL (web), in result order. */
+function uniqueHits(hits) {
+  const seen = new Set();
+  return (hits || []).filter((x) => !seen.has(keyOf(x)) && seen.add(keyOf(x)));
 }
-const say = (text) => text && h('span', { class: 'beat-desc' }, `${text.replace(/…\.$/, '…')} `);
-const outcome = (text) => text && h('span', { class: 'beat-outcome' }, `${text} `);
-const cue = (text) => h('span', { class: 'beat-cue' }, icon('arrowUp'), text);
 
-const BEATS = {
-  plan: (ev) => beat('compass', 'Understanding your question', say(ev.summary || {
-    documents: "This looks like it's about your documents, so I'll start there.",
-    knowledge: 'This is general knowledge, so I can answer directly.',
-    web: "This needs up-to-date information, so I'll search the web.",
-  }[ev.route] || 'Deciding where to look.')),
-  rag(ev) {
-    const hybrid = ev.node === 'hybrid';
-    const hits = ev.chunks || [];
-    const searched = hybrid
-      ? (hits.length ? `Searched for exact words and similar meaning, kept the best ${plural(hits.length, 'passage')}.` : 'Searched for exact words and similar meaning, but nothing relevant turned up.')
-      : foundIn(hits);
-    return beat(hybrid ? 'search' : 'book', hybrid ? 'Looking closer' : 'Reading your documents', [
-      say(searched),
-      outcome(ev.summary || (ev.verdict === 'nothing new' ? 'Nothing new turned up.' : '')),
-      ev.verdict !== 'sufficient' && cue(hybrid ? 'Still not enough — checking the web' : 'Not quite enough yet — looking closer'),
-    ]);
-  },
-  web(ev) {
-    const urls = [...new Set((ev.chunks || []).map((x) => x.url).filter((u) => safeUrl(u)))];
-    const domains = [...new Set(urls.map(domain))];
-    return beat('globe', 'Checking the web', say(urls.length ? `Read ${plural(urls.length, 'page')} from ${upTo(domains, 3)}.` : "Couldn't find useful pages on the web."));
-  },
-  generate: (ev) => (ev.retry || ev.attempt > 1
-    ? beat('pen', 'Rewriting the answer', say("Fixing a quote that didn't match its source exactly."))
-    : beat('pen', WRITE, say(ev.citations ? `Wrote an answer backed by ${plural(ev.citations, 'quote')} from the sources.` : 'Wrote the answer.'))),
-  verify(ev) {
-    const ok = !ev.total || ev.verified === ev.total;
-    const text = !ev.total ? 'There were no quotes to check.'
-      : ok ? `${ev.verified} of ${ev.total} quotes found word-for-word in their sources.`
-        : `${ev.verified} of ${ev.total} quotes confirmed${ev.retry ? ' — fixing the rest.' : '.'}`;
-    return beat('shield', 'Double-checking every quote', say(text), ok ? 'done' : 'warn');
-  },
-  // agent mode
-  think: (ev) => beat('sparkle', 'Thinking', say(ev.summary || 'Deciding what to look up.')),
-  tool(ev, parallel) {
-    const hits = ev.chunks || [];
-    const query = String(ev.query || '');
-    // agents write long keyword queries; the narrator shows the start, technical details show it all
-    const q = `Searched for “${query.length > 60 ? `${query.slice(0, 60).replace(/\s+\S*$/, '')}…` : query}” — `;
-    const together = parallel && h('span', { class: 'beat-tag' }, 'at the same time');
-    if (ev.tool === 'search_web') {
-      const domains = webDomains(hits);
-      return beat('globe', 'Checking the web', [together, say(q + (domains.length ? `read pages from ${upTo(domains, 3)}.` : 'no useful pages turned up.'))]);
-    }
-    const deep = ev.depth === 'deep';
-    return beat(deep ? 'search' : 'book', deep ? 'Looking closer in your documents' : 'Reading your documents',
-      [together, say(q + (hits.length ? `found ${passagesIn(hits)}.` : 'nothing relevant turned up.'))]);
-  },
+/** Source tile: PDF "p.124" + first words of the passage, or web letter avatar + domain + first words. */
+function tile(x) {
+  const url = safeUrl(x.url);
+  const words = firstWords(x.snippet || x.label, 10);
+  if (url) {
+    const d = domain(url);
+    const avatar = h('span', { class: 'avatar', 'aria-hidden': 'true' }, (d[0] || '?').toUpperCase());
+    avatar.style.setProperty('--h', String(hue(d)));
+    return h('li', { 'data-key': keyOf(x) }, h('a', { class: 'tile tile--web', href: url.href, target: '_blank', rel: 'noopener noreferrer', title: `${url.href}\n${x.snippet || ''}` },
+      h('span', { class: 'tile-top' }, avatar, h('span', { class: 'tile-src' }, d)), h('span', { class: 'tile-text' }, words)));
+  }
+  return h('li', { 'data-key': keyOf(x) }, h('div', { class: 'tile tile--doc', title: `${docName(x.source)}${x.page ? ` · p. ${x.page}` : ''}\n${x.snippet || ''}` },
+    h('span', { class: 'tile-top' }, icon('file'), h('span', { class: 'tile-src' }, x.page ? `p.${x.page}` : docName(x.source))),
+    h('span', { class: 'tile-text' }, words)));
+}
+
+function tiles(hits, max) {
+  const list = uniqueHits(hits);
+  if (!list.length) return null;
+  return h('ul', { class: 'tiles' },
+    list.slice(0, max).map((x, i) => { const li = tile(x); li.style.setProperty('--i', String(i)); return li; }),
+    list.length > max && h('li', { class: 'tile-more' }, `+${list.length - max} more`));
+}
+
+const KIND = {
+  quick: { icon: 'book', done: 'Searched your documents', running: 'Searching your documents' },
+  deep: { icon: 'search', done: 'Searched deeper', running: 'Looking closer' },
+  web: { icon: 'globe', done: 'Searched the web', running: 'Searching the web' },
+  any: { icon: 'sparkle', done: 'Searched', running: 'Choosing what to look up' },
 };
-BEATS.hybrid = BEATS.rag;
+
+/** A finished search: kind, query, result count, source tiles (when this search has its own results), takeaway. */
+function toolCard(kind, queries, { hits = null, takeaway = '' } = {}) {
+  const k = KIND[kind] || KIND.any;
+  const qs = (Array.isArray(queries) ? queries : [queries]).filter(Boolean).map(String);
+  const count = hits?.length > 0 && (kind === 'web' ? plural(uniqueHits(hits).length, 'page') : plural(hits.length, 'result'));
+  return h('div', { class: `tool tool--${kind}` },
+    h('div', { class: 'tool-head' },
+      h('span', { class: 'tool-icon' }, icon(k.icon)),
+      h('span', { class: 'tool-title' }, h('span', { class: 'tool-kind' }, k.done),
+        qs.length > 0 && h('span', { class: 'tool-query', title: qs.join('\n') }, ` “${short(qs[0], 80)}”`, qs.length > 1 && h('span', { class: 'muted' }, ` +${qs.length - 1} more`))),
+      count && h('span', { class: 'tool-meta' }, count)),
+    hits && tiles(hits, 4),
+    takeaway && h('p', { class: 'tool-takeaway' }, takeaway));
+}
+
+/** A search we expect is running now (steps only arrive when a node finishes): spinner + elapsed time. */
+function toolPending(kind) {
+  const k = KIND[kind] || KIND.any;
+  return h('div', { class: 'tool tool--running', 'data-pending': '' },
+    h('div', { class: 'tool-head' },
+      h('span', { class: 'tool-icon' }, h('span', { class: 'spinner' })),
+      h('span', { class: 'tool-title' }, h('span', { class: 'tool-kind working-label' }, `${k.running}…`)),
+      h('span', { class: 'tool-meta mono', 'data-start': String(performance.now()) }, '0.0 s')));
+}
+
+const STATUS = {
+  pending: { text: 'Researching', glyph: null },
+  found: { text: 'Found', glyph: 'check' },
+  partial: { text: 'Partly found', glyph: 'half' },
+  missing: { text: 'Not found', glyph: 'x' },
+  stopped: { text: 'Stopped', glyph: 'x' },
+};
+
+/** The live board: parts (status, note, answering tiles, nested searches) plus a "looking across all parts" lane. */
+function Board(question) {
+  const ladder = Ladder();
+  const acrossTools = h('div', { class: 'tools' });
+  const across = h('section', { class: 'across', hidden: true, 'aria-label': 'Searches across all parts' },
+    h('div', { class: 'lane-label' }, icon('layers'), 'Looking across all parts'), acrossTools);
+  const skeleton = [0, 1].map(() => h('li', { class: 'part part--skeleton', 'aria-hidden': 'true' }, h('span', { class: 'sk sk--dot' }), h('span', { class: 'sk sk--line' })));
+  const list = h('ol', { class: 'parts', 'aria-label': 'Parts of your question' }, skeleton);
+  const milestones = h('ul', { class: 'milestones', hidden: true });
+  const parts = new Map(); // id -> { el, chip, note, tilesBox, tools, key, data }
+
+  function make(p) {
+    const r = { chip: h('span', { class: 'pstatus' }), note: h('p', { class: 'part-note', hidden: true }), tilesBox: h('div', { class: 'part-tiles' }), tools: h('div', { class: 'tools' }), key: null };
+    r.el = h('li', { class: 'part' }, h('div', { class: 'part-head' }, h('span', { class: 'part-label' }, p.label || question), r.chip), r.note, r.tilesBox, r.tools);
+    return r;
+  }
+  function setStatus(r, st) {
+    if (r.el.dataset.status === st) return;
+    r.el.dataset.status = st;
+    const g = STATUS[st].glyph;
+    r.chip.replaceChildren(h('span', { class: 'pglyph' }, g ? icon(g) : h('span', { class: 'ring' })), STATUS[st].text);
+    r.chip.classList.remove('morph');
+    void r.chip.offsetWidth; // restart the morph animation
+    r.chip.classList.add('morph');
+  }
+  /** A part shows the sources that answered it; ones already visible in its own search cards are marked there instead. */
+  function refresh(r) {
+    const used = new Set((r.data.sources || []).map(keyOf));
+    const inCards = new Set();
+    for (const li of r.tools.querySelectorAll('[data-key]')) {
+      li.classList.toggle('used', used.has(li.dataset.key));
+      inCards.add(li.dataset.key);
+    }
+    const rest = (r.data.sources || []).filter((x) => !inCards.has(keyOf(x)));
+    const key = rest.map(keyOf).join('|');
+    if (key !== r.key) { r.key = key; r.tilesBox.replaceChildren(...[tiles(rest, 6)].filter(Boolean)); }
+  }
+  function setParts(items) {
+    skeleton.forEach((s) => s.remove());
+    for (const p of items) {
+      let r = parts.get(p.id);
+      if (!r) { r = make(p); parts.set(p.id, r); list.append(r.el); }
+      r.data = p;
+      setStatus(r, STATUS[p.status] ? p.status : 'pending');
+      r.note.textContent = p.note || '';
+      r.note.hidden = !p.note;
+      refresh(r);
+    }
+  }
+  /** Where a search for part pid goes: under that part; with one part, under it; otherwise the "across" lane. */
+  function slot(pid) {
+    if (pid && parts.has(pid)) return parts.get(pid).tools;
+    if (parts.size === 1) return [...parts.values()][0].tools;
+    across.hidden = false;
+    return acrossTools;
+  }
+  function busy() { for (const r of parts.values()) r.el.classList.toggle('is-busy', !!r.tools.querySelector('[data-pending]')); }
+  const open = () => [...parts.values()].filter((r) => r.data.status !== 'found').map((r) => r.data.id);
+
+  return {
+    els: [ladder.el, across, list, milestones],
+    ladder,
+    setParts,
+    /** Old backends send no parts: the whole question is the one part. */
+    ensure() { if (!parts.size) setParts([{ id: '_q', label: question, status: 'pending', note: '', sources: [] }]); },
+    implicit: () => parts.has('_q'),
+    add(pid, card) {
+      const s = slot(pid);
+      s.querySelector(':scope > [data-pending]')?.remove();
+      s.append(card);
+      const r = [...parts.values()].find((x) => x.tools === s);
+      if (r) refresh(r);
+      busy();
+    },
+    pending(kind, pids) { for (const pid of (pids.length ? pids : [null])) slot(pid).append(toolPending(kind)); busy(); },
+    clearPending() { for (const e of [...acrossTools.children, ...[...parts.values()].flatMap((r) => [...r.tools.children])]) if (e.hasAttribute('data-pending')) e.remove(); busy(); },
+    open,
+    milestone(iconName, text, warn) { milestones.hidden = false; milestones.append(h('li', { class: `milestone${warn ? ' milestone--warn' : ''}` }, icon(iconName), text)); },
+    stop() { this.clearPending(); for (const r of parts.values()) if (r.data.status === 'pending') setStatus(r, 'stopped'); },
+    summary() {
+      const ps = [...parts.values()].map((r) => r.data);
+      const n = (s) => ps.filter((p) => p.status === s).length;
+      return { parts: ps.length, found: n('found'), partial: n('partial'), missing: n('missing'), sources: uniqueHits(ps.flatMap((p) => p.sources || [])).length };
+    },
+  };
+}
 
 function card(ev, iconName, title, sub, ...body) {
   return h('li', { class: `step step--${ev.node}` },
@@ -586,42 +682,84 @@ function renderAnswer(res, turnId) {
 
 let turnSeq = 0;
 
+const searchKind = (ev) => (ev.tool === 'search_web' ? 'web' : ev.depth === 'deep' ? 'deep' : 'quick');
+const VERDICT = { found: 'Found what this part needs', partial: 'Found part of it', missing: 'Nothing relevant for this part' };
+const verdictFor = (ev, pid) => VERDICT[(ev.parts || []).find((p) => p.id === pid)?.status] || '';
+
+/** Put one finished step on the board: searches become tool cards, generate/verify become milestones,
+ * and the searches we expect next get a running placeholder. */
+function onBoard(board, ev) {
+  const n = ev.node;
+  if (n !== 'tool') board.clearPending();
+  if (n === 'plan') {
+    if (ev.route === 'documents') board.pending('quick', []);
+    else if (ev.route === 'web') board.pending('web', board.open());
+  } else if (n === 'rag' || n === 'hybrid') {
+    const searches = ev.searches || [{ part: null, query: (ev.queries || []).join(' · '), kind: n === 'rag' ? 'quick' : 'deep' }];
+    const broad = searches.filter((s) => !s.part);
+    if (broad.length) {
+      const hits = ev.chunks || [];
+      board.add(null, toolCard(broad[0].kind || 'quick', broad.map((s) => s.query), { hits, takeaway: ev.summary || (hits.length ? '' : 'Nothing relevant turned up') }));
+    }
+    for (const s of searches.filter((x) => x.part)) board.add(s.part, toolCard(s.kind || 'deep', s.query, { takeaway: verdictFor(ev, s.part) }));
+    if (ev.verdict !== 'sufficient') board.pending(n === 'rag' ? 'deep' : 'web', board.open());
+  } else if (n === 'web') {
+    for (const s of ev.searches || [{ part: null, query: ev.query, chunks: ev.chunks }]) {
+      const hits = s.chunks || [];
+      board.add(s.part, toolCard('web', s.query, { hits, takeaway: hits.length ? '' : 'No useful pages turned up' }));
+    }
+  } else if (n === 'think') {
+    board.pending('any', board.open());
+  } else if (n === 'tool') {
+    const hits = ev.chunks || [];
+    const web = ev.tool === 'search_web';
+    board.add(ev.part, toolCard(searchKind(ev), ev.query, {
+      hits,
+      takeaway: !hits.length ? 'Nothing relevant turned up' : web ? '' : `In ${whereFound(hits)}`,
+    }));
+  } else if (n === 'generate') {
+    board.milestone('pen', ev.retry || ev.attempt > 1 ? 'Rewrote the answer' : `Answer drafted with ${plural(ev.citations ?? 0, 'quote')}`);
+  } else if (n === 'verify') {
+    const ok = !ev.total || ev.verified === ev.total;
+    board.milestone(ok ? 'shield' : 'alert', ev.total ? `${ev.verified} of ${ev.total} quotes found word-for-word${ok ? '' : ev.retry ? ' — fixing the rest' : ''}` : 'No quotes to check', !ok);
+  }
+}
+
 function Turn(query, retry, mode) {
   const id = ++turnSeq;
-  const ladder = Ladder();
+  const board = Board(query);
   const label = h('span', { class: 'working-label' }, nextLabel(null, mode));
   const clock = h('span', { class: 'working-time mono', 'aria-hidden': 'true' }, '0.0 s');
-  // the step in progress: shimmering status + typing dots; finished steps are inserted above it
-  const working = h('li', { class: 'beat beat--live' },
-    h('span', { class: 'beat-icon' }, h('span', { class: 'spinner' })),
-    h('p', { class: 'beat-text' }, label, h('span', { class: 'dots', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')), clock));
-  const story = h('ol', { class: 'story' }, working);
+  const live = h('div', { class: 'board-live' }, h('span', { class: 'spinner' }), label,
+    h('span', { class: 'dots', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')), clock);
   // power-user view: the original detail cards (queries, chunks, scores, judge reasoning), collapsed by default
   const steps = h('ol', { class: 'steps' });
   const techLabel = h('span', {}, 'Show technical details');
   const tech = h('details', { class: 'tech', hidden: true }, h('summary', {}, icon('chevron', 'chev'), techLabel), steps);
   tech.addEventListener('toggle', () => { techLabel.textContent = `${tech.open ? 'Hide' : 'Show'} technical details`; });
-  const summary = h('span', { class: 'summary-text' }, mode === 'agent' ? 'The agent is working on it…' : 'Researching your question…');
-  const timeline = h('details', { class: 'timeline', open: true },
+  const summary = h('span', { class: 'summary-text' }, mode === 'agent' ? 'The agent is researching…' : 'Researching your question…');
+  const panel = h('details', { class: 'timeline board', open: true },
     h('summary', {}, icon('chevron', 'chev'), summary),
-    h('div', { class: 'timeline-body' }, ladder.el, story, tech));
+    h('div', { class: 'board-body' }, board.els, live, tech));
   const body = h('div', { class: 'turn-body' });
   const el = h('article', { class: 'turn', 'aria-labelledby': `q-${id}`, 'aria-busy': 'true' },
     h('h2', { class: 'q', id: `q-${id}` }, query),
-    h('section', { class: 'research', 'aria-label': 'What happened behind the scenes' }, timeline),
+    h('section', { class: 'research', 'aria-label': 'Research board' }, panel),
     body);
 
   const t0 = performance.now();
-  const timer = setInterval(() => { clock.textContent = secs((performance.now() - t0) / 1000); }, 100);
+  const timer = setInterval(() => {
+    const now = performance.now();
+    clock.textContent = secs((now - t0) / 1000);
+    for (const e of panel.querySelectorAll('[data-start]')) e.textContent = secs((now - Number(e.dataset.start)) / 1000);
+  }, 100);
   let count = 0;
-  let tools = 0;
-  let prev = null; // last step, to spot agent tool calls that ran in parallel (same round)
   let lastT = 0;
   announce(label.textContent);
 
   function settle() {
     clearInterval(timer);
-    working.remove();
+    live.remove();
     el.removeAttribute('aria-busy');
   }
 
@@ -629,15 +767,14 @@ function Turn(query, retry, mode) {
     el,
     step(ev) {
       count++;
-      if (ev.node === 'tool') tools++;
-      const parallel = ev.node === 'tool' && prev?.node === 'tool' && prev.round === ev.round;
-      prev = ev;
       lastT = Number(ev.t) || lastT;
       follow(() => {
-        story.insertBefore((BEATS[ev.node] || ((e) => beat('dot', String(e.node || 'Step'), [])))(ev, parallel), working);
+        if (ev.parts?.length) board.setParts(ev.parts);
+        else board.ensure();
+        onBoard(board, ev);
         steps.append(renderStep(ev, query));
         tech.hidden = false;
-        ladder.step(ev);
+        board.ladder.step(ev);
         label.textContent = nextLabel(ev, mode);
       });
       announce(label.textContent);
@@ -646,27 +783,33 @@ function Turn(query, retry, mode) {
       settle();
       const failed = (res.trace || []).some((s) => String(s).startsWith('Error:'));
       if (failed) return this.fail(res.answer || 'The pipeline failed.');
-      if (!count && res.trace?.length) { // backend sent no steps: show its text trace instead
-        story.append(beat('dot', 'How this was answered', say(res.trace.join(' · '))));
+      board.clearPending();
+      if (res.parts?.length) board.setParts(res.parts);
+      else {
+        board.ensure();
+        if (board.implicit()) board.setParts([{ id: '_q', label: query, status: 'found', note: res.tier === 'knowledge' ? 'From general knowledge' : '', sources: [] }]);
       }
-      ladder.final(res.tier);
+      board.ladder.final(res.tier);
       const t = TIER[res.tier];
-      const tier = t?.found || res.tier;
+      const s = board.summary();
+      const sources = s.sources || (res.citations || []).length;
       const took = `${Math.round(res.seconds ?? lastT)} s`;
-      summary.textContent = (res.mode || mode) === 'agent'
-        ? `Agent · ${tools ? plural(tools, 'tool call') : 'no tool calls'} · ${took} · ${tier}`
-        : `${state.agentOk ? 'Step by step · ' : ''}${res.tier === 'knowledge' ? 'Answered' : 'Researched'} in ${plural(Math.max(count, 1), 'step')} · ${took} · ${tier}`;
-      timeline.open = false;
+      const head = (res.mode || mode) === 'agent' ? 'Agent · ' : '';
+      summary.textContent = res.tier === 'knowledge'
+        ? `${head}${plural(s.parts, 'part')} · answered from general knowledge · ${took}`
+        : `${head}${plural(s.parts, 'part')} · ${s.found} found${s.partial ? ` · ${s.partial} partly` : ''}${s.missing ? ` · ${s.missing} not found` : ''} · ${plural(sources, 'source')} · ${took}`;
+      panel.open = false;
       const answer = renderAnswer(res, id);
       const sc = $('scroller');
       const pinned = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 160;
       body.append(answer);
       if (pinned) el.scrollIntoView({ behavior: reducedMotion.matches ? 'auto' : 'smooth', block: 'start' });
-      announce(`Answer ready, ${tier}. ${res.verified ? 'All quotes verified.' : res.tier === 'knowledge' ? 'Not checked against sources.' : 'Some quotes could not be verified.'}`);
+      announce(`Answer ready, ${t?.found || res.tier}. ${res.verified ? 'All quotes verified.' : res.tier === 'knowledge' ? 'Not checked against sources.' : 'Some quotes could not be verified.'}`);
     },
     fail(message) {
       settle();
-      ladder.stop();
+      board.stop();
+      board.ladder.stop();
       summary.textContent = count ? `Stopped after ${plural(count, 'step')}` : 'Stopped before the first step finished';
       follow(() => body.append(errorBox(message, retry)));
       announce(`Error: ${message}`);
