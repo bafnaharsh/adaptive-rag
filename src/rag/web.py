@@ -3,6 +3,7 @@ Tier 3: web search. Tavily when settings.TAVILY_API_KEY is set, otherwise DuckDu
 """
 
 import hashlib
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
@@ -28,10 +29,14 @@ def _search(query: str) -> list[dict]:
     from ddgs import DDGS
     from ddgs.exceptions import DDGSException
 
-    try:
-        hits = DDGS().text(query, max_results=8)
-    except DDGSException:  # backends rate-limit at random; a second "auto" pass usually lands on a working one
-        hits = DDGS().text(query, max_results=8)
+    for attempt in range(3):
+        try:
+            hits = DDGS().text(query, max_results=8)
+            break
+        except DDGSException:  # backends rate-limit bursts at random; a later "auto" pass usually lands on a working one
+            if attempt == 2:
+                raise
+            time.sleep(1.5 * (attempt + 1))
     return [{"url": h["href"], "title": h.get("title", ""), "snippet": h.get("body", "")} for h in hits]
 
 

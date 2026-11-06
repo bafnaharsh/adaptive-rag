@@ -17,13 +17,13 @@ prompts:
 
     1. standalone_question: the new message rewritten to be understandable without the conversation (resolve "it", "that one" and other follow-ups). Unchanged if it already is.
     2. route, exactly one of:
-       - "knowledge": ONLY if it is not about the indexed documents, not time-sensitive, and you can answer it reliably from general knowledge (greetings, definitions, math, well-established facts).
-       - "documents": it concerns the subject of the indexed documents. Prefer this when unsure.
-       - "web": it needs current or external information and the documents are unrelated.
+       - "knowledge": greetings, math, definitions and well-established facts you know reliably that are not time-sensitive, EVEN when they touch the documents' subject (e.g. "who makes the iPhone", "what does USB stand for"). Never for what a user would expect from their documents: procedures, settings, values, part numbers, warnings, or anything specific to the documented product or version.
+       - "documents": the indexed documents are likely to contain the answer (judge by the document descriptions and the closest passages), or the question has several parts and ANY part is likely answered by them (the other parts are searched on the web afterwards). Prefer this when unsure.
+       - "web": no part of the answer is likely in these documents: current or external information, news, prices, release dates, or specifications and products the documents do not describe, even when the topic is related.
     3. answer: the full answer in markdown if route is "knowledge", otherwise "".
 
     Return only JSON:
-    {{"standalone_question": "...", "reasoning": "one short sentence", "route": "knowledge | documents | web", "answer": ""}}
+    {{"standalone_question": "...", "reasoning": "one short sentence", "route": "knowledge | documents | web", "summary": "what you will do and why, in under 15 plain words for a non-technical user, e.g. This is about iPhone repair, so I will check your manuals first.", "answer": ""}}
 
   judge: |
     Decide whether the evidence below is enough to answer the question completely and accurately.
@@ -35,10 +35,12 @@ prompts:
 
     Reason step by step in 2-4 short sentences: what the relevant sources (by id) say about the question, then what the question asks that no source covers. Sufficient means every part can be answered from this evidence alone, without guessing.
     A source that states the answer directly is enough: do not hold out for a figure, the same statement repeated in another step, or confirmation from a second source.
-    If not sufficient, write 2-3 search queries for what is missing, best first: rephrase with the wording a manual or web page would use, or split the question into simpler parts.
+    If not sufficient, write one search query per missing part (at most 3, never for parts the evidence already answers), worded the way a manual or web page would say it, and put each in the right list:
+    - search_documents: missing parts these documents are likely to cover. Any precise detail about something the documents describe (a limit, value, part number, tool, warning or step of a procedure in them) counts: a sharper search often finds it in another section;
+    - search_web: missing parts these documents would not contain at all (marketing specifications such as megapixels, battery mAh or screen size, prices, news, suppliers, other products, newer facts).
 
     Return only JSON:
-    {{"reasoning": "...", "sufficient": true | false, "missing": "what is still needed, or empty", "next_queries": ["...", "..."]}}
+    {{"reasoning": "...", "sufficient": true | false, "missing": "what is still needed, or empty", "search_documents": ["..."], "search_web": ["..."], "summary": "the verdict in under 20 plain words for a non-technical user, no ids or jargon, e.g. The manual lists the warning signs but not what to do once smoke appears."}}
 
   generate: |
     Answer the question using ONLY the evidence below, never outside knowledge.

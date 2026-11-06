@@ -111,9 +111,16 @@ tests/                 offline unit tests (pytest)
 The eval uses two Apple manuals (not committed, see [eval/SOURCES.md](eval/SOURCES.md) to download):
 the iPhone User Guide (196 pages) and the iPhone 16 repair manual (214 pages), with 20 questions across all tiers.
 
-Latest run (2026-11-06, `cli:claude` = Claude Haiku via the CLI, no key): **20/20 passed**, 49/49 citations verified,
-the expected manual page cited for 14/14 document questions, tiers used: 10 rag, 3 hybrid, 3 knowledge, 4 web,
-median 12.6 s per answer. Full answers and traces: [eval/REPORT.md](eval/REPORT.md).
+Latest run (2026-11-06, `cli:claude` = Claude Haiku via the CLI, no key): **19/20 passed**, 54/54 citations verified,
+the expected manual page cited for 14/14 document questions, tiers used: 11 rag, 2 hybrid, 3 knowledge, 4 web,
+median 7.9 s per answer. The one miss is the checker's literal keywords: the answer says "Play a sound" and "Erase the
+phone" where it expects "Play Sound" and "Erase iPhone". Full answers and traces: [eval/REPORT.md](eval/REPORT.md).
+
+Routing rules learned from real use: well-known facts ("who makes the iPhone") are answered from model knowledge even
+when they touch the documents' subject; after Tier 1 the judge sorts each missing part into "search the documents
+deeper" or "only on the web", so a mixed question (camera megapixels + who makes them + how to replace them) gets the
+specs from the web and the procedure pages from the manual, and an off-topic one skips Tier 2. Retrieval reads on
+three chunks past each top hit, because procedure pages after a section's first page rarely repeat its title.
 `cli:agy` and `cli:copilot` give the same grounded answers but slower (each call starts a fresh CLI: ~1.5-3 min per
 answer against ~13 s for the pooled claude sessions).
 

@@ -292,6 +292,19 @@ def rerank(query: str, chunks: list[Chunk], k: int, min_score: float | None = No
     return _rerank([query], chunks, min_score)[:k]
 
 
+def neighbors(chunk_id: str, after: int = 2) -> list[Chunk]:
+    """The `after` chunks that follow a doc chunk in the same document, in reading order. Search finds a section by
+    its first page (the one carrying the title); the steps of the procedure or the rest of the table follow it."""
+    kind, _, key = chunk_id.partition(":")
+    if kind != "doc" or not key.isdigit():
+        return []
+    with _db() as con:
+        ids = [r[0] for r in con.execute(
+            "SELECT id FROM chunks WHERE doc_id = (SELECT doc_id FROM chunks WHERE id = ?) AND id > ? ORDER BY id LIMIT ?",
+            (int(key), int(key), after))]
+    return _load(ids, [0.0] * len(ids))
+
+
 def get_chunk(chunk_id: str) -> Chunk | None:
     """Look up "doc:<int>" or "web:<hex>" (web passages saved by save_web_chunks). None when unknown."""
     kind, _, key = chunk_id.partition(":")

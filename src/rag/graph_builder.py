@@ -8,9 +8,11 @@ rag, hybrid: retrieve, then an LLM judge decides sufficient -> generate, else th
 web -> generate -> verify -> END, or back to generate once with the verification failures as feedback
 """
 
+import itertools
 import json
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from langchain_core.messages import BaseMessage
 from langgraph.graph import END, START, StateGraph
@@ -23,7 +25,12 @@ from src.models.state import State
 from src.rag import citations, store, web
 
 PROMPTS = Config()
-MAX_CHUNKS, MAX_CHARS = 12, 12_000  # evidence cap across tiers, keeps judge/generate prompts small and fast
+# Evidence cap across tiers: room for one multi-part question's document passages plus web passages, small enough
+# to keep judge/generate prompts fast.
+MAX_CHUNKS, MAX_CHARS = 16, 16_000
+# Separate budgets per source kind: in a mixed question (specs from the web, a procedure from the manual) web passages
+# must not crowd the manual's pages out of the evidence, or the other way round.
+BUDGET = {"doc": (MAX_CHUNKS, MAX_CHARS), "web": (8, 8_000)}
 MAX_ATTEMPTS = 2  # generate calls: the first answer plus one retry with verification feedback
 ROLE = {"human": "User", "ai": "Assistant"}
 KNOWLEDGE_NOTE = "*Answered from the model's general knowledge; no documents or web sources were consulted.*\n\n"
@@ -49,16 +56,17 @@ def _evidence(chunks: list[Chunk]) -> str:
 
 
 def _merge(new: list[Chunk], old: list[Chunk]) -> list[Chunk]:
-    """Deduped by id and capped. Scores are not comparable across tiers; the later tier searched more specifically,
-    so its chunks go first."""
+    """Deduped by id and capped per source kind (BUDGET). Scores are not comparable across tiers; the later tier
+    searched more specifically, so its chunks go first."""
     out: dict[str, Chunk] = {}
-    size = 0
+    used = {kind: [0, 0] for kind in BUDGET}  # chunks, chars
     for c in [*new, *old]:
-        if len(out) == MAX_CHUNKS or size >= MAX_CHARS:
-            break
-        if c.id not in out:
-            out[c.id] = c
-            size += len(c.text)
+        kind = c.id.partition(":")[0]
+        count, size = used[kind]
+        if c.id in out or count == BUDGET[kind][0] or size >= BUDGET[kind][1]:
+            continue
+        out[c.id] = c
+        used[kind] = [count + 1, size + len(c.text)]
     return list(out.values())
 
 
@@ -85,6 +93,7 @@ def plan(s: State) -> dict:
         trace.append("No documents indexed → web")
     out = {"route": route, "standalone": standalone, "trace": trace,
            "step": {"node": "plan", "route": route, "reasoning": str(d.get("reasoning", "")), "standalone": standalone,
+                    "summary": str(d.get("summary") or ""),
                     "note": "No documents indexed → web" if route == "web" and d.get("route") == "documents" else None}}
     if route == "knowledge":
         out |= {"tier": "knowledge", "answer": KNOWLEDGE_NOTE + str(d["answer"])}
@@ -104,39 +113,70 @@ def _judge(s: State, tier: str, head: str, found: list[Chunk], queries: list[str
     if not new:  # nothing new: judging the same evidence again is wasted
         return {"tier": tier, "sufficient": False, "trace": [f"{head} → nothing new → escalate"],
                 "step": step | {"verdict": "nothing new", "reasoning": "", "missing": "",
-                                "next_queries": s.get("next_queries", [])}}
+                                "next_queries": s.get("doc_queries", []) + s.get("web_queries", [])}}
     evidence = _merge(found, old)
     d = llm.ask_json(PROMPTS.prompt("judge").format(question=s["standalone"], evidence=_evidence(evidence)))
     labels = {c.id: f"[{c.label()}]" for c in evidence}  # the judge names sources by id; people read "file, p. 5"
     d["reasoning"] = re.sub(r"\b(?:doc|web):\w+", lambda m: labels.get(m.group().lower(), m.group()),
                             str(d.get("reasoning", "")), flags=re.I)
     ok = str(d.get("sufficient")).lower() == "true"
+    doc_q, web_q = ([q for q in d.get(key) or [] if isinstance(q, str) and q.strip()][:3]
+                    for key in ("search_documents", "search_web"))
     verdict = "sufficient" if ok else f"insufficient — {d.get('missing') or 'more evidence needed'}"
-    next_queries = [q for q in d.get("next_queries") or [] if isinstance(q, str) and q.strip()][:3]
-    return {"tier": tier, "evidence": evidence, "sufficient": ok, "next_queries": next_queries,
+    if not ok:
+        verdict += f" → next: documents {doc_q}, web {web_q}"
+        if tier == "rag" and web_q and not doc_q:
+            verdict += " (the documents don't cover the rest: skip the deeper document search)"
+    return {"tier": tier, "evidence": evidence, "sufficient": ok, "doc_queries": doc_q, "web_queries": web_q,
             "trace": [f"{head} → judge: {verdict}", f"Reasoning: {d.get('reasoning', '')}"],
             "step": step | {"verdict": "sufficient" if ok else "insufficient", "reasoning": str(d.get("reasoning", "")),
-                            "missing": "" if ok else str(d.get("missing") or ""), "next_queries": next_queries}}
+                            "summary": str(d.get("summary") or ""),
+                            "look_next": None if ok else ("documents" if doc_q or not web_q else "web"),
+                            "missing": "" if ok else str(d.get("missing") or ""), "next_queries": doc_q + web_q}}
+
+
+def _read_on(found: list[Chunk]) -> list[Chunk]:
+    """The best hits are often a section's first page; its steps continue on pages that never repeat the title (the
+    iPhone 16 camera removal steps on pp. 124-128 never say "camera"), so each of the top 3 hits is followed by the
+    next three chunks of its document."""
+    seen, expanded = {c.id for c in found}, []
+    for c in found[:3]:
+        expanded.append(c)
+        for n in store.neighbors(c.id, after=3):
+            if n.id not in seen:
+                seen.add(n.id)
+                expanded.append(n)
+    return (expanded + found[3:])[:MAX_CHUNKS]
 
 
 def rag(s: State) -> dict:
-    found = store.dense_search(s["standalone"], k=6)
+    found = _read_on(store.dense_search(s["standalone"], k=6))
     return _judge(s, "rag", f"Tier 1 · RAG (dense): {_found(found)}", found, [s["standalone"]])
 
 
 def hybrid(s: State) -> dict:
-    queries = [s["standalone"], *s.get("next_queries", [])]
-    found = store.hybrid_search(queries, k=MAX_CHUNKS)  # the whole evidence budget: answers in tables rank ~9th-10th
+    queries = [s["standalone"], *s.get("doc_queries", [])]
+    found = _read_on(store.hybrid_search(queries, k=MAX_CHUNKS))  # whole budget: answers in tables rank ~9th-10th
     head = f"Tier 2 · Hybrid (BM25+dense, reranked): {len(queries)} queries ({' | '.join(queries)}) → {_found(found)}"
     return _judge(s, "hybrid", head, found, queries)
 
 
 def web_tier(s: State) -> dict:
-    query = (s.get("next_queries") or [s["standalone"]])[0]
-    found = web.web_search(query, k=5)
+    # The judge's top two web queries, searched in parallel: a multi-part question ("MP of the cameras, who makes them,
+    # how to replace them") has its missing parts spread over different queries.
+    queries = (s.get("web_queries") or s.get("doc_queries") or [s["standalone"]])[:2]
+
+    def search(i_q):
+        i, q = i_q
+        time.sleep(2 * i)  # free search backends throttle simultaneous queries from one machine: stagger them
+        return web.web_search(q, k=5)
+
+    with ThreadPoolExecutor(len(queries)) as pool:
+        results = list(pool.map(search, enumerate(queries)))
+    found = list({c.id: c for c in itertools.chain(*itertools.zip_longest(*results)) if c}.values())  # interleaved
     return {"tier": "web", "evidence": _merge(found, s.get("evidence", [])),
-            "trace": [f"Tier 3 · Web: “{query}” → {_found(found)}"],
-            "step": {"node": "web", "query": query, "chunks": _hits(found)}}
+            "trace": [f"Tier 3 · Web: {' | '.join(f'“{q}”' for q in queries)} → {_found(found)}"],
+            "step": {"node": "web", "query": " | ".join(queries), "chunks": _hits(found)}}
 
 
 def generate(s: State) -> dict:
@@ -185,8 +225,12 @@ for name, node in [("plan", plan), ("rag", rag), ("hybrid", hybrid), ("web", web
     graph.add_node(name, node)
 graph.add_edge(START, "plan")
 graph.add_conditional_edges("plan", lambda s: s["route"], {"knowledge": END, "documents": "rag", "web": "web"})
-graph.add_conditional_edges("rag", lambda s: "sufficient" if s["sufficient"] else "insufficient",
-                            {"sufficient": "generate", "insufficient": "hybrid"})
+# After Tier 1 a deeper document search (Tier 2) runs only when some missing part is likely in the documents; when
+# the judge says the rest is only on the web, Tier 2 would just cost time.
+graph.add_conditional_edges(
+    "rag", lambda s: "sufficient" if s["sufficient"] else
+    "web" if s.get("web_queries") and not s.get("doc_queries") else "documents",
+    {"sufficient": "generate", "documents": "hybrid", "web": "web"})
 graph.add_conditional_edges("hybrid", lambda s: "sufficient" if s["sufficient"] else "insufficient",
                             {"sufficient": "generate", "insufficient": "web"})
 graph.add_edge("web", "generate")  # the last tier: no judge, generate says what the evidence does not cover

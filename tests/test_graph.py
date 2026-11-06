@@ -28,7 +28,7 @@ def plan(route, standalone=Q, answer=""):
 
 def judge(sufficient, *queries):
     return {"reasoning": "step by step", "sufficient": sufficient, "missing": "" if sufficient else "the iPhone 17 figure",
-            "next_queries": list(queries)}
+            "search_documents": list(queries), "search_web": []}
 
 
 def gen(source_id, quote, answer="Up to 20 hours of video playback [1]."):
@@ -45,7 +45,7 @@ def env(monkeypatch):
                         prompts=[], calls=[])
 
     def ask_json(prompt, *args, **kwargs):
-        kind = "plan" if "standalone_question" in prompt else "judge" if "next_queries" in prompt else "generate"
+        kind = "plan" if "standalone_question" in prompt else "judge" if "search_documents" in prompt else "generate"
         e.prompts.append((kind, prompt))
         reply = e.replies[kind].pop(0)
         if isinstance(reply, Exception):
@@ -57,6 +57,7 @@ def env(monkeypatch):
     monkeypatch.setattr(store, "dense_search", lambda q, k=6, doc_ids=None: e.calls.append(("dense", q, k)) or [GUIDE, CASE])
     monkeypatch.setattr(store, "hybrid_search", lambda qs, k=8, doc_ids=None: e.calls.append(("hybrid", qs, k)) or e.hybrid)
     monkeypatch.setattr(store, "get_chunk", lambda chunk_id: None)
+    monkeypatch.setattr(store, "neighbors", lambda chunk_id, after=2: [])
     monkeypatch.setattr(web, "web_search", lambda q, k=5: e.calls.append(("web", q, k)) or [NEWS])
     return e
 
@@ -93,7 +94,7 @@ def test_dense_insufficient_escalates_to_hybrid(env):
                     "generate": [gen("doc:3", "streamed video playback lasts up to 16 hours")]}
     r = graph_builder.answer(Q)
     assert r["tier"] == "hybrid" and r["verified"] is True
-    assert ("hybrid", [Q, "iPhone battery hours", "video playback time"], 12) in env.calls
+    assert ("hybrid", [Q, "iPhone battery hours", "video playback time"], graph_builder.MAX_CHUNKS) in env.calls
     assert not any(c[0] == "web" for c in env.calls)
     assert kinds(env) == ["plan", "judge", "judge", "generate"]
     assert any(line.startswith("Tier 2 · Hybrid") and line.endswith("judge: sufficient") for line in r["trace"])
@@ -177,6 +178,28 @@ def test_llm_failure_returns_error_answer(env, failure):
     assert str(failure) in r["answer"] and r["rendered"] == r["answer"]
     assert r["citations"] == [] and r["verified"] is False
     assert r["trace"][0].startswith("Plan:") and r["trace"][-1] == f"Error: {type(failure).__name__}: {failure}"
+
+
+def test_judge_sends_off_topic_question_straight_to_web(env):
+    env.replies |= {"plan": [plan("documents")],
+                    "judge": [judge(False) | {"search_web": ["iPhone 17 battery capacity mAh"]}],
+                    "generate": [WEB_GOOD]}
+    events = list(graph_builder.stream_answer(Q))
+    assert [d["node"] for kind, d in events if kind == "step"] == ["plan", "rag", "web", "generate", "verify"]
+    assert not any(c[0] == "hybrid" for c in env.calls) and ("web", "iPhone 17 battery capacity mAh", 5) in env.calls
+    assert events[-1][1]["tier"] == "web" and "skip the deeper document search" in " ".join(events[-1][1]["trace"])
+
+
+def test_mixed_question_routes_each_missing_part_and_keeps_both_sources(env):
+    env.replies |= {"plan": [plan("documents")],
+                    "judge": [judge(False, "camera removal steps") | {"search_web": ["iPhone 17 camera megapixels"]},
+                              judge(False) | {"search_web": ["iPhone 17 camera megapixels"]}],
+                    "generate": [WEB_GOOD]}
+    r = graph_builder.answer(Q)
+    assert ("hybrid", [Q, "camera removal steps"], graph_builder.MAX_CHUNKS) in env.calls
+    assert ("web", "iPhone 17 camera megapixels", 5) in env.calls
+    evidence = env.prompts[-1][1]  # the generate prompt
+    assert 'id="web:' in evidence and 'id="doc:' in evidence
 
 
 def test_stream_answer_emits_one_step_per_node_then_final(env):

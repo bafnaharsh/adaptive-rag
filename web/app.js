@@ -23,17 +23,21 @@ const ICONS = {
   refresh: '<path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M8 16H3v5"/>',
   arrowUp: '<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>',
   dot: '<circle cx="12" cy="12" r="3"/>',
+  compass: '<circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/>',
+  book: '<path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"/><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"/>',
 };
 
+// friendly: what a non-technical reader sees (badge row, summaries); hint: the pill's tooltip
 const TIERS = [
-  { key: 'knowledge', name: 'Knowledge', icon: 'bulb', label: 'Tier 0 · knowledge' },
-  { key: 'rag', name: 'RAG', icon: 'db', label: 'Tier 1 · RAG' },
-  { key: 'hybrid', name: 'Hybrid', icon: 'layers', label: 'Tier 2 · hybrid' },
-  { key: 'web', name: 'Web', icon: 'globe', label: 'Tier 3 · web' },
+  { key: 'knowledge', name: 'Knowledge', icon: 'bulb', label: 'Tier 0 · knowledge', friendly: 'General knowledge', found: 'from general knowledge', hint: 'Answer from general knowledge' },
+  { key: 'rag', name: 'RAG', icon: 'db', label: 'Tier 1 · RAG', friendly: 'Your documents', found: 'found in your documents', hint: 'Search your documents' },
+  { key: 'hybrid', name: 'Hybrid', icon: 'layers', label: 'Tier 2 · hybrid', friendly: 'Your documents (deeper search)', found: 'found in your documents (deeper search)', hint: 'Deeper search in your documents' },
+  { key: 'web', name: 'Web', icon: 'globe', label: 'Tier 3 · web', friendly: 'The web', found: 'found on the web', hint: 'Search the web' },
 ];
 const TIER = Object.fromEntries(TIERS.map((t) => [t.key, t]));
-const STATE_TEXT = { idle: 'not reached', active: 'in progress', passed: 'not enough evidence, escalated', reached: 'answered here', skipped: 'skipped' };
-const WRITE = 'Writing a grounded answer';
+const STATE_TEXT = { idle: 'not reached', active: 'in progress', passed: 'not enough there, went deeper', reached: 'answer found here', skipped: 'skipped' };
+const WRITE = 'Writing the answer';
+const docInfo = new Map(); // file name -> description, filled by loadDocs(), used for friendly document names
 
 // ---------- helpers ----------
 
@@ -248,7 +252,7 @@ function Ladder() {
   TIERS.forEach((t, i) => {
     if (i) { const c = h('span', { class: 'conn', 'aria-hidden': 'true' }); conns.push(c); el.append(c); }
     const sr = h('span', { class: 'sr-only' }, `: ${STATE_TEXT.idle}`);
-    const li = h('div', { class: 'tier', role: 'listitem', 'data-state': 'idle' }, icon(t.icon), h('span', {}, t.name), sr);
+    const li = h('div', { class: 'tier', role: 'listitem', 'data-state': 'idle', title: t.hint }, icon(t.icon), h('span', {}, t.name), sr);
     pills[t.key] = { li, sr };
     el.append(li);
   });
@@ -289,17 +293,89 @@ function Ladder() {
 
 /** What the pipeline is doing now, inferred from the last finished step (steps arrive only when a node ends). */
 function nextLabel(ev) {
-  if (!ev) return 'Planning';
+  if (!ev) return 'Understanding your question';
   switch (ev.node) {
-    case 'plan': return { documents: 'Searching documents (Tier 1 · RAG)', web: 'Searching the web (Tier 3)', knowledge: 'Answering from model knowledge' }[ev.route] || 'Working';
-    case 'rag': return ev.verdict === 'sufficient' ? WRITE : 'Hybrid search: BM25 + dense + rerank';
-    case 'hybrid': return ev.verdict === 'sufficient' ? WRITE : 'Searching the web (Tier 3)';
+    case 'plan': return { documents: 'Reading your documents', web: 'Checking the web', knowledge: 'Writing the answer from general knowledge' }[ev.route] || 'Working on it';
+    case 'rag': return ev.verdict === 'sufficient' ? WRITE : 'Looking closer';
+    case 'hybrid': return ev.verdict === 'sufficient' ? WRITE : 'Checking the web';
     case 'web': return WRITE;
-    case 'generate': return 'Verifying citations';
-    case 'verify': return ev.retry ? 'Rewriting with verification feedback' : 'Finishing up';
-    default: return 'Working';
+    case 'generate': return 'Double-checking every quote';
+    case 'verify': return ev.retry ? "Fixing a quote that didn't match its source exactly" : 'Finishing up';
+    default: return 'Working on it';
   }
 }
+
+// ---------- narrator view: one plain-language line per finished step ----------
+
+const upTo = (items, max) => items.slice(0, max).join(', ') + (items.length > max ? '…' : '');
+
+/** The document's description when it is a short title, else its file name without extension and underscores. */
+function docName(file) {
+  const d = (docInfo.get(file) || '').trim();
+  return d && d.length <= 60 ? d : String(file || 'your documents').replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim();
+}
+
+/** "Found 6 relevant passages in iPhone 16 Repair Manual (pages 5, 28, 85)." */
+function foundIn(hits) {
+  if (!hits.length) return "Didn't find anything relevant in your documents yet.";
+  const files = new Map();
+  for (const x of hits) {
+    const k = x.source || x.label;
+    if (!files.has(k)) files.set(k, new Set());
+    if (x.page) files.get(k).add(x.page);
+  }
+  const parts = [...files].map(([file, set]) => {
+    const pages = [...set].sort((a, b) => a - b);
+    return pages.length ? `${docName(file)} (${pages.length > 1 ? 'pages' : 'page'} ${upTo(pages, 4)})` : docName(file);
+  });
+  const where = parts.length > 2 ? `${parts.slice(0, 2).join(', ')} and ${parts.length - 2} more` : parts.join(' and ');
+  return `Found ${plural(hits.length, 'relevant passage')} in ${where}.`;
+}
+
+function beat(iconName, title, parts, state = 'done') {
+  return h('li', { class: `beat beat--${state}` },
+    h('span', { class: 'beat-icon' }, icon(iconName), h('span', { class: 'beat-badge', 'aria-hidden': 'true' }, state === 'warn' ? '!' : icon('check'))),
+    h('p', { class: 'beat-text' }, h('span', { class: 'beat-title' }, title), ' ', parts));
+}
+const say = (text) => text && h('span', { class: 'beat-desc' }, `${text} `);
+const outcome = (text) => text && h('span', { class: 'beat-outcome' }, `${text} `);
+const cue = (text) => h('span', { class: 'beat-cue' }, icon('arrowUp'), text);
+
+const BEATS = {
+  plan: (ev) => beat('compass', 'Understanding your question', say(ev.summary || {
+    documents: "This looks like it's about your documents, so I'll start there.",
+    knowledge: 'This is general knowledge, so I can answer directly.',
+    web: "This needs up-to-date information, so I'll search the web.",
+  }[ev.route] || 'Deciding where to look.')),
+  rag(ev) {
+    const hybrid = ev.node === 'hybrid';
+    const hits = ev.chunks || [];
+    const searched = hybrid
+      ? (hits.length ? `Searched for exact words and similar meaning, kept the best ${plural(hits.length, 'passage')}.` : 'Searched for exact words and similar meaning, but nothing relevant turned up.')
+      : foundIn(hits);
+    return beat(hybrid ? 'search' : 'book', hybrid ? 'Looking closer' : 'Reading your documents', [
+      say(searched),
+      outcome(ev.summary || (ev.verdict === 'nothing new' ? 'Nothing new turned up.' : '')),
+      ev.verdict !== 'sufficient' && cue(hybrid ? 'Still not enough — checking the web' : 'Not quite enough yet — looking closer'),
+    ]);
+  },
+  web(ev) {
+    const urls = [...new Set((ev.chunks || []).map((x) => x.url).filter((u) => safeUrl(u)))];
+    const domains = [...new Set(urls.map(domain))];
+    return beat('globe', 'Checking the web', say(urls.length ? `Read ${plural(urls.length, 'page')} from ${upTo(domains, 3)}.` : "Couldn't find useful pages on the web."));
+  },
+  generate: (ev) => (ev.retry || ev.attempt > 1
+    ? beat('pen', 'Rewriting the answer', say("Fixing a quote that didn't match its source exactly."))
+    : beat('pen', WRITE, say(ev.citations ? `Wrote an answer backed by ${plural(ev.citations, 'quote')} from the sources.` : 'Wrote the answer.'))),
+  verify(ev) {
+    const ok = !ev.total || ev.verified === ev.total;
+    const text = !ev.total ? 'There were no quotes to check.'
+      : ok ? `${ev.verified} of ${ev.total} quotes found word-for-word in their sources.`
+        : `${ev.verified} of ${ev.total} quotes confirmed${ev.retry ? ' — fixing the rest.' : '.'}`;
+    return beat('shield', 'Double-checking every quote', say(text), ok ? 'done' : 'warn');
+  },
+};
+BEATS.hybrid = BEATS.rag;
 
 function card(ev, iconName, title, sub, ...body) {
   return h('li', { class: `step step--${ev.node}` },
@@ -438,7 +514,7 @@ function renderAnswer(res, turnId) {
   const knowledge = res.tier === 'knowledge';
   const t = TIER[res.tier];
   const badges = h('div', { class: 'badges' },
-    h('span', { class: 'badge badge--tier' }, icon(t?.icon || 'dot'), t?.label || res.tier || 'unknown tier'),
+    h('span', { class: 'badge badge--tier', title: t?.label }, icon(t?.icon || 'dot'), t?.friendly || res.tier || 'Unknown source'),
     all.length > 0 && !bad && res.verified !== false && h('span', { class: 'badge badge--ok' }, icon('check'), 'All citations verified'),
     bad > 0 && h('span', { class: 'badge badge--warn' }, icon('alert'), `${bad} of ${all.length} citations unverified`),
     knowledge && !all.length && h('span', { class: 'badge' }, 'Not verified'),
@@ -447,7 +523,7 @@ function renderAnswer(res, turnId) {
   return h('div', { class: 'answer' },
     h('h3', { class: 'label-h' }, 'Answer'),
     knowledge && h('div', { class: 'callout' }, icon('bulb'),
-      h('p', {}, h('strong', {}, 'Model knowledge — not verified against sources. '), 'The planner judged this a general question, so no documents or web pages were searched.')),
+      h('p', {}, h('strong', {}, 'General knowledge — not verified against sources. '), 'This looked like a general question, so no documents or web pages were searched.')),
     prose,
     badges,
     all.length > 0 && h('section', { class: 'sources', 'aria-label': 'Sources' },
@@ -475,26 +551,33 @@ let turnSeq = 0;
 function Turn(query, retry) {
   const id = ++turnSeq;
   const ladder = Ladder();
-  const label = h('span', { class: 'working-label' }, 'Planning');
+  const label = h('span', { class: 'working-label' }, nextLabel());
   const clock = h('span', { class: 'working-time mono', 'aria-hidden': 'true' }, '0.0 s');
-  const working = h('li', { class: 'step step--working' },
-    h('span', { class: 'rail-dot' }, h('span', { class: 'spinner' })),
-    h('div', { class: 'working' }, label, clock));
-  const steps = h('ol', { class: 'steps' }, working);
-  const summary = h('span', { class: 'summary-text' }, 'Researching…');
+  // the step in progress: shimmering status + typing dots; finished steps are inserted above it
+  const working = h('li', { class: 'beat beat--live' },
+    h('span', { class: 'beat-icon' }, h('span', { class: 'spinner' })),
+    h('p', { class: 'beat-text' }, label, h('span', { class: 'dots', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')), clock));
+  const story = h('ol', { class: 'story' }, working);
+  // power-user view: the original detail cards (queries, chunks, scores, judge reasoning), collapsed by default
+  const steps = h('ol', { class: 'steps' });
+  const techLabel = h('span', {}, 'Show technical details');
+  const tech = h('details', { class: 'tech', hidden: true }, h('summary', {}, icon('chevron', 'chev'), techLabel), steps);
+  tech.addEventListener('toggle', () => { techLabel.textContent = `${tech.open ? 'Hide' : 'Show'} technical details`; });
+  const summary = h('span', { class: 'summary-text' }, 'Researching your question…');
   const timeline = h('details', { class: 'timeline', open: true },
-    h('summary', {}, icon('chevron', 'chev'), summary), steps);
+    h('summary', {}, icon('chevron', 'chev'), summary),
+    h('div', { class: 'timeline-body' }, ladder.el, story, tech));
   const body = h('div', { class: 'turn-body' });
   const el = h('article', { class: 'turn', 'aria-labelledby': `q-${id}`, 'aria-busy': 'true' },
     h('h2', { class: 'q', id: `q-${id}` }, query),
-    h('section', { class: 'research', 'aria-label': 'Research steps' }, ladder.el, timeline),
+    h('section', { class: 'research', 'aria-label': 'What happened behind the scenes' }, timeline),
     body);
 
   const t0 = performance.now();
   const timer = setInterval(() => { clock.textContent = secs((performance.now() - t0) / 1000); }, 100);
   let count = 0;
   let lastT = 0;
-  announce('Planning');
+  announce(label.textContent);
 
   function settle() {
     clearInterval(timer);
@@ -508,10 +591,11 @@ function Turn(query, retry) {
       count++;
       lastT = Number(ev.t) || lastT;
       follow(() => {
-        steps.insertBefore(renderStep(ev, query), working);
+        story.insertBefore((BEATS[ev.node] || ((e) => beat('dot', String(e.node || 'Step'), [])))(ev), working);
+        steps.append(renderStep(ev, query));
+        tech.hidden = false;
         ladder.step(ev);
         label.textContent = nextLabel(ev);
-        summary.textContent = `Researching… · ${plural(count, 'step')}`;
       });
       announce(label.textContent);
     },
@@ -520,24 +604,24 @@ function Turn(query, retry) {
       const failed = (res.trace || []).some((s) => String(s).startsWith('Error:'));
       if (failed) return this.fail(res.answer || 'The pipeline failed.');
       if (!count && res.trace?.length) { // backend sent no steps: show its text trace instead
-        steps.append(h('li', { class: 'step' }, h('span', { class: 'rail-dot' }, icon('dot')),
-          h('div', { class: 'card' }, h('ul', { class: 'trace' }, res.trace.map((s) => h('li', {}, s))))));
+        story.append(beat('dot', 'How this was answered', say(res.trace.join(' · '))));
       }
       ladder.final(res.tier);
-      const tier = TIER[res.tier]?.label || res.tier;
-      summary.textContent = `${plural(count, 'step')} · ${secs(res.seconds ?? lastT)} · ${tier}`;
+      const t = TIER[res.tier];
+      const tier = t?.found || res.tier;
+      summary.textContent = `${res.tier === 'knowledge' ? 'Answered' : 'Researched'} in ${plural(Math.max(count, 1), 'step')} · ${Math.round(res.seconds ?? lastT)} s · ${tier}`;
       timeline.open = false;
       const answer = renderAnswer(res, id);
       const sc = $('scroller');
       const pinned = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 160;
       body.append(answer);
       if (pinned) el.scrollIntoView({ behavior: reducedMotion.matches ? 'auto' : 'smooth', block: 'start' });
-      announce(`Answer ready. ${tier}. ${res.verified ? 'All citations verified.' : res.tier === 'knowledge' ? 'From model knowledge, not verified.' : 'Some citations unverified.'}`);
+      announce(`Answer ready, ${tier}. ${res.verified ? 'All quotes verified.' : res.tier === 'knowledge' ? 'Not checked against sources.' : 'Some quotes could not be verified.'}`);
     },
     fail(message) {
       settle();
       ladder.stop();
-      summary.textContent = count ? `${plural(count, 'step')} · stopped` : 'No steps completed';
+      summary.textContent = count ? `Stopped after ${plural(count, 'step')}` : 'Stopped before the first step finished';
       follow(() => body.append(errorBox(message, retry)));
       announce(`Error: ${message}`);
     },
@@ -667,6 +751,7 @@ async function loadDocs() {
   const list = $('docs');
   try {
     const docs = await getJSON('/rag/documents');
+    for (const d of docs) docInfo.set(d.name, d.description || '');
     $('docs-count').textContent = docs.length ? String(docs.length) : '';
     list.replaceChildren(...(docs.length ? docs.map((d) => h('li', { class: 'doc', title: d.description || d.name },
       icon('file'),
