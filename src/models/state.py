@@ -27,3 +27,4 @@ class State(TypedDict, total=False):
     attempts: int                # generate calls so far
     verified: bool
     trace: Annotated[list[str], operator.add]  # human-readable steps; every node appends
+    step: dict                   # the last node's structured step, streamed to the UI by stream_answer()

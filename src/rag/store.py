@@ -310,3 +310,9 @@ def save_web_chunks(chunks: list[Chunk]) -> None:
     with _db() as con:
         con.executemany("INSERT OR REPLACE INTO web_chunks (id, url, title, text) VALUES (?, ?, ?, ?)",
                         [(c.id, c.source, c.title, c.text) for c in chunks])
+
+
+def warm() -> None:
+    """Load both models and the embedding matrix now (a few seconds) instead of on the first question."""
+    dense_search("warm up", 1)
+    _reranker()

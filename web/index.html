@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#fafaf9" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0e0f10" media="(prefers-color-scheme: dark)">
+  <!-- Answers and snippets come from LLMs and web pages: no inline script, no third-party connections. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <title>Adaptive RAG</title>
+  <meta name="description" content="Research-style answers with verified, quoted citations.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%230d7a6f'/%3E%3Crect x='5' y='14' width='3' height='5' rx='1' fill='white'/%3E%3Crect x='10.5' y='10' width='3' height='9' rx='1' fill='white'/%3E%3Crect x='16' y='6' width='3' height='13' rx='1' fill='white'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js" integrity="sha384-/TQbtLCAerC3jgaim+N78RZSDYV7ryeoBCVqTuzRrFec2akfBkHS7ACQ3PQhvMVi" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js" integrity="sha384-+VfUPEb0PdtChMwmBcBmykRMDd+v6D/oFmB3rZM/puCMDYcIvF968OimRh4KQY9a" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <a class="skip" href="#q">Skip to question box</a>
+  <div class="app">
+    <aside class="sidebar" id="sidebar" aria-label="Library and settings">
+      <div class="brand">
+        <svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="6"/><rect x="5" y="14" width="3" height="5" rx="1"/><rect x="10.5" y="10" width="3" height="9" rx="1"/><rect x="16" y="6" width="3" height="13" rx="1"/></svg>
+        <div>
+          <h1>Adaptive RAG</h1>
+          <p class="muted">Answers with verified quotes</p>
+        </div>
+        <button class="icon-btn only-mobile close-nav" id="nav-close" type="button" aria-label="Close sidebar">
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <button class="btn btn--primary btn--block" id="new-chat" type="button">
+        <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+        New chat
+      </button>
+
+      <ul class="env" id="env" aria-label="Backend" translate="no">
+        <li class="env-chip"><span class="dot"></span>Connecting…</li>
+      </ul>
+
+      <section class="side-section" aria-labelledby="docs-h">
+        <h2 class="label-h" id="docs-h">Documents <span class="count" id="docs-count"></span></h2>
+        <ul class="docs" id="docs">
+          <li class="docs-empty muted">Loading…</li>
+        </ul>
+      </section>
+
+      <section class="side-section" aria-labelledby="upload-h">
+        <h2 class="label-h" id="upload-h">Add a document</h2>
+        <form class="upload" id="upload" novalidate>
+          <label class="drop" id="drop" for="file">
+            <input class="sr-only" type="file" id="file" name="file" accept=".pdf,.txt,.md,application/pdf,text/plain,text/markdown">
+            <svg class="i i--lg" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></svg>
+            <span class="drop-title" id="drop-title">Drop a PDF, TXT or MD</span>
+            <span class="drop-sub" id="drop-sub">or <u>browse files</u></span>
+          </label>
+          <div class="field">
+            <label for="desc">Description <span class="muted">(optional)</span></label>
+            <input type="text" id="desc" name="desc" autocomplete="off" maxlength="300" placeholder="e.g. iPhone 16 repair manual">
+          </div>
+          <button class="btn btn--block" id="upload-btn" type="submit">Index document</button>
+          <div class="upload-status" id="upload-status" role="status" aria-live="polite"></div>
+        </form>
+      </section>
+    </aside>
+    <div class="scrim" id="scrim" hidden></div>
+
+    <main class="main">
+      <header class="topbar only-mobile">
+        <button class="icon-btn" id="nav-open" type="button" aria-label="Open sidebar" aria-controls="sidebar" aria-expanded="false">
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+        <span class="topbar-title">Adaptive RAG</span>
+        <button class="icon-btn" id="new-chat-m" type="button" aria-label="New chat">
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+        </button>
+      </header>
+
+      <div class="scroller" id="scroller">
+        <div class="thread" id="thread">
+          <section class="empty" id="empty" aria-labelledby="empty-h">
+            <h2 id="empty-h">Ask a question. Watch it get researched.</h2>
+            <p class="lede">Each question climbs a ladder and stops at the first tier with enough evidence. Every claim cites a verbatim quote, checked against its source.</p>
+            <ol class="intro-ladder">
+              <li><span class="n">0</span><strong>Knowledge</strong><span>the model answers directly</span></li>
+              <li><span class="n">1</span><strong>RAG</strong><span>dense search in your documents</span></li>
+              <li><span class="n">2</span><strong>Hybrid</strong><span>BM25 + dense + rerank</span></li>
+              <li><span class="n">3</span><strong>Web</strong><span>search and read pages</span></li>
+            </ol>
+            <h3 class="label-h">Try</h3>
+            <div class="examples" id="examples">
+              <button type="button" class="example">How do I take burst photos with the iPhone camera?</button>
+              <button type="button" class="example">What is the part number of the blue torque driver for the iPhone 16?</button>
+              <button type="button" class="example">How do I turn on Emergency SOS?</button>
+              <button type="button" class="example">What does USB stand for?</button>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <div class="composer-wrap">
+        <form class="composer" id="composer">
+          <label class="sr-only" for="q">Ask a question</label>
+          <textarea id="q" name="q" rows="1" placeholder="Ask about your documents, or anything…" enterkeyhint="send" autocomplete="off"></textarea>
+          <button class="send" id="send" type="submit" aria-label="Send question">
+            <svg class="i send-i" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>
+            <svg class="i stop-i" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
+          </button>
+        </form>
+        <p class="hint"><kbd>Enter</kbd> to send · <kbd>Shift</kbd> + <kbd>Enter</kbd> for a new line</p>
+      </div>
+    </main>
+  </div>
+
+  <div class="pop" id="cite-pop" role="tooltip" hidden></div>
+  <div class="sr-only" id="announcer" aria-live="polite" aria-atomic="true"></div>
+</body>
+</html>

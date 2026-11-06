@@ -15,11 +15,10 @@ tavily-python
 requests~=2.32.4
 beautifulsoup4~=4.13.4
 
-# Serving: REST API, UI, MCP server for Claude Code / Antigravity / Copilot
+# Serving: REST API + static web UI, MCP server for Claude Code / Antigravity / Copilot
 fastapi
 uvicorn
 python-multipart
-streamlit
 mcp
 
 # Tests

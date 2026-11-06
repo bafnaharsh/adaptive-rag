@@ -51,20 +51,22 @@ Embeddings (`BAAI/bge-small-en-v1.5`) and the reranker (`ms-marco-MiniLM-L-6-v2`
 uv venv .venv --python 3.13
 uv pip install --python .venv/Scripts/python.exe -r requirements.txt   # .venv/bin/python on macOS/Linux
 
-# API (http://127.0.0.1:8000/docs)
+# API + chat UI: open http://127.0.0.1:8000 (API docs at /docs)
 .venv/Scripts/python.exe -m uvicorn src.main:app
-# UI, in a second terminal
-.venv/Scripts/python.exe -m streamlit run streamlit_app/home.py
 ```
 
-Upload a PDF/TXT/MD in the sidebar, then ask. Each answer shows its tier, ✓/⚠ citation status, the reasoning trace
-("How I answered") and the sources with page numbers or links.
+Upload a PDF/TXT/MD in the sidebar, then ask. While the answer is researched, every step appears live as a card
+(plan, each tier's retrieved chunks and the judge's step-by-step verdict, web results, generation, citation check).
+The answer's `[n]` chips show the verbatim quote and its page or link; sources are marked ✓ verified or ⚠.
+Every answered turn is appended to `data/conversations.jsonl` (question, answer, citations, trace) for later review.
 
 ### API
 
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| POST | `/rag/query` | `{"query": "...", "session_id": "..."}` | `{answer, rendered, citations, tier, trace, verified, session_id}` |
+| POST | `/rag/query` | `{"query": "...", "session_id": "..."}` | `{answer, rendered, citations, tier, trace, verified, seconds, session_id}` |
+| POST | `/rag/query/stream` | same | server-sent events: `step` per finished node (plan, rag, hybrid, web, generate, verify), then `final` |
+| GET | `/rag/info` | | `{llm, web}` backends in use |
 | POST | `/rag/documents/upload` | multipart `file`, optional header `X-Description` | `{status, document: {doc_id, name, pages, chunks, status}}` |
 | GET | `/rag/documents` | | indexed documents |
 
@@ -78,8 +80,7 @@ Follow-up questions work: the planner rewrites them into standalone questions fr
 | `CLI_MODEL` | per CLI (`haiku`, `gemini-3.8-flash-medium`, `auto`) | model flag for `cli:*` |
 | `TAVILY_API_KEY` | empty | use Tavily instead of DuckDuckGo |
 | `MONGO_URL` | empty | persist chat history in MongoDB (`pip install motor`); default is in-memory |
-| `DATA_DIR` | `./data` | SQLite index, uploads, model cache |
-| `RAG_API_URL` | `http://127.0.0.1:8000` | where the UI finds the API |
+| `DATA_DIR` | `./data` | SQLite index, uploads, model cache, conversation log |
 
 ## Layout
 
@@ -93,7 +94,7 @@ src/
   config/prompts.yaml  plan, judge, generate, regenerate prompts
   mcp_server.py        MCP server for Claude Code / agy / Copilot
   api/, memory/, db/   FastAPI routes, chat history (in-memory or MongoDB)
-streamlit_app/home.py  chat UI
+web/                   chat UI (static HTML/CSS/JS served by the API, streams the reasoning steps)
 eval/                  iPhone manual test set, sources, ground-truth checker, REPORT.md
 scripts/run_eval.py    end-to-end eval
 tests/                 offline unit tests (pytest)

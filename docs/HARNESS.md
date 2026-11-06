@@ -36,7 +36,7 @@ Check: `agy mcp list`. Undo: `agy mcp remove adaptive-rag`.
 
   Check: `copilot mcp list` / `copilot mcp get adaptive-rag`. Undo: `copilot mcp remove adaptive-rag`.
 
-## LLM backend for the server-side pipeline (`research` tool, API, Streamlit)
+## LLM backend for the server-side pipeline (`research` tool, API, web UI)
 
 Set `LLM_MODEL` (env or `.env`); a comma-separated list is a fallback chain (see `src/llms/llm.py`):
 

@@ -144,6 +144,14 @@ def _byok_ask(model: str, prompt: str) -> str:
     return content.strip()
 
 
+def warm() -> None:
+    """Start two claude sessions now (Popen returns at once): the first question skips the ~4 s start, and calls
+    alternate between them, so a session recycled after RECYCLE calls has warmed up before it is used again."""
+    if backends()[:1] == ["cli:claude"]:
+        for _ in range(2):
+            _pool.put(_Session(settings.CLI_MODEL or CLI_DEFAULT_MODEL["claude"]))
+
+
 def backends() -> list[str]:
     return [b.strip() for b in settings.LLM_MODEL.split(",") if b.strip()]
 

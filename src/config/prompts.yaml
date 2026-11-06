@@ -33,7 +33,7 @@ prompts:
     Evidence:
     {evidence}
 
-    Reason step by step: what the relevant sources (by id) say about the question, then what the question asks that no source covers. Sufficient means every part can be answered from this evidence alone, without guessing.
+    Reason step by step in 2-4 short sentences: what the relevant sources (by id) say about the question, then what the question asks that no source covers. Sufficient means every part can be answered from this evidence alone, without guessing.
     A source that states the answer directly is enough: do not hold out for a figure, the same statement repeated in another step, or confirmation from a second source.
     If not sufficient, write 2-3 search queries for what is missing, best first: rephrase with the wording a manual or web page would use, or split the question into simpler parts.
 

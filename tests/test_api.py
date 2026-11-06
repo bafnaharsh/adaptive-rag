@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -73,3 +75,23 @@ def test_upload_path_traversal_sanitized(client, monkeypatch, tmp_path):
 def test_list_documents(client, monkeypatch):
     monkeypatch.setattr(store, "list_documents", lambda: [{"doc_id": 1, "name": "a.pdf"}])
     assert client.get("/rag/documents").json() == [{"doc_id": 1, "name": "a.pdf"}]
+
+
+def test_stream_sends_steps_then_final_and_logs_the_turn(client, monkeypatch):
+    def stream_answer(q, h):
+        yield "step", {"node": "plan", "route": "documents", "t": 0.5}
+        yield "final", {**RESULT, "seconds": 1.0}
+
+    monkeypatch.setattr(graph_builder, "stream_answer", stream_answer)
+    r = client.post("/rag/query/stream", json={"query": "q1", "session_id": "s-stream"})
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
+    events = [block.split("\n", 1) for block in r.text.strip().split("\n\n")]
+    assert [e[0] for e in events] == ["event: step", "event: final"]
+    assert json.loads(events[1][1].removeprefix("data: "))["session_id"] == "s-stream"
+    logged = json.loads((settings.DATA_DIR / "conversations.jsonl").read_text(encoding="utf-8"))
+    assert logged["question"] == "q1" and logged["answer"] == RESULT["answer"]
+
+
+def test_info(client):
+    web = "tavily" if settings.TAVILY_API_KEY else "duckduckgo"
+    assert client.get("/rag/info").json() == {"llm": settings.LLM_MODEL, "web": web}

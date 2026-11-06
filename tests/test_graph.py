@@ -177,3 +177,19 @@ def test_llm_failure_returns_error_answer(env, failure):
     assert str(failure) in r["answer"] and r["rendered"] == r["answer"]
     assert r["citations"] == [] and r["verified"] is False
     assert r["trace"][0].startswith("Plan:") and r["trace"][-1] == f"Error: {type(failure).__name__}: {failure}"
+
+
+def test_stream_answer_emits_one_step_per_node_then_final(env):
+    env.replies |= {"plan": [plan("documents")], "judge": [judge(False, "iPhone battery hours"), judge(True)],
+                    "generate": [gen("doc:3", "streamed video playback lasts up to 16 hours")]}
+    events = list(graph_builder.stream_answer(Q))
+    steps = [d for kind, d in events if kind == "step"]
+    assert [s["node"] for s in steps] == ["plan", "rag", "hybrid", "generate", "verify"]
+    assert steps[0]["route"] == "documents" and steps[0]["standalone"] == Q
+    assert steps[1]["verdict"] == "insufficient" and steps[1]["next_queries"] == ["iPhone battery hours"]
+    assert steps[1]["chunks"][0]["label"] == "iphone_user_guide.pdf, p. 42" and steps[1]["chunks"][0]["url"] is None
+    assert steps[2]["queries"] == [Q, "iPhone battery hours"] and steps[2]["verdict"] == "sufficient"
+    assert steps[4] | {"t": 0} == {"node": "verify", "verified": 1, "total": 1, "problems": [], "retry": False, "t": 0}
+    assert all(isinstance(s["t"], float) for s in steps)
+    kind, final = events[-1]
+    assert kind == "final" and final["tier"] == "hybrid" and final["verified"] is True and "seconds" in final
