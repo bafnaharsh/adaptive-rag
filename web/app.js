@@ -24,6 +24,7 @@ const ICONS = {
   arrowUp: '<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>',
   dot: '<circle cx="12" cy="12" r="3"/>',
   compass: '<circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/>',
+  sparkle: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15v4"/><path d="M17 17h4"/>',
   book: '<path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"/><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"/>',
 };
 
@@ -35,7 +36,7 @@ const TIERS = [
   { key: 'web', name: 'Web', icon: 'globe', label: 'Tier 3 · web', friendly: 'The web', found: 'found on the web', hint: 'Search the web' },
 ];
 const TIER = Object.fromEntries(TIERS.map((t) => [t.key, t]));
-const STATE_TEXT = { idle: 'not reached', active: 'in progress', passed: 'not enough there, went deeper', reached: 'answer found here', skipped: 'skipped' };
+const STATE_TEXT = { idle: 'not reached', active: 'in progress', passed: 'not enough there, went deeper', reached: 'answer found here', skipped: 'skipped', used: 'used by the agent' };
 const WRITE = 'Writing the answer';
 const docInfo = new Map(); // file name -> description, filled by loadDocs(), used for friendly document names
 
@@ -278,11 +279,16 @@ function Ladder() {
           for (const t of TIERS.slice(TIERS.indexOf(TIER[ev.node]) + 1)) set(t.key, 'skipped');
         } else { set(ev.node, 'passed'); set(next, 'active'); }
       } else if (ev.node === 'web') set('web', 'reached');
+      else if (ev.node === 'tool') { // agent mode: light the tiers it actually used, no escalation
+        const k = ev.tool === 'search_web' ? 'web' : ev.depth === 'deep' ? 'hybrid' : 'rag';
+        if (get(k) !== 'reached') set(k, 'used');
+      }
     },
     final(tier) {
       for (const t of TIERS) {
         const s = get(t.key);
         if (t.key === tier) set(t.key, 'reached');
+        else if (s === 'used') continue;
         else if (s === 'reached' || s === 'active') set(t.key, TIERS.indexOf(t) < TIERS.indexOf(TIER[tier] || TIER.web) ? 'passed' : 'skipped');
         else if (s === 'idle') set(t.key, 'skipped');
       }
@@ -292,9 +298,11 @@ function Ladder() {
 }
 
 /** What the pipeline is doing now, inferred from the last finished step (steps arrive only when a node ends). */
-function nextLabel(ev) {
-  if (!ev) return 'Understanding your question';
+function nextLabel(ev, mode) {
+  if (!ev) return mode === 'agent' ? 'Thinking' : 'Understanding your question';
   switch (ev.node) {
+    case 'think': return 'Looking things up';
+    case 'tool': return 'Reading what it found';
     case 'plan': return { documents: 'Reading your documents', web: 'Checking the web', knowledge: 'Writing the answer from general knowledge' }[ev.route] || 'Working on it';
     case 'rag': return ev.verdict === 'sufficient' ? WRITE : 'Looking closer';
     case 'hybrid': return ev.verdict === 'sufficient' ? WRITE : 'Checking the web';
@@ -317,7 +325,11 @@ function docName(file) {
 
 /** "Found 6 relevant passages in iPhone 16 Repair Manual (pages 5, 28, 85)." */
 function foundIn(hits) {
-  if (!hits.length) return "Didn't find anything relevant in your documents yet.";
+  return hits.length ? `Found ${passagesIn(hits)}.` : "Didn't find anything relevant in your documents yet.";
+}
+
+/** "6 relevant passages in iPhone 16 Repair Manual (pages 5, 28, 85)" for a non-empty hit list. */
+function passagesIn(hits) {
   const files = new Map();
   for (const x of hits) {
     const k = x.source || x.label;
@@ -329,15 +341,17 @@ function foundIn(hits) {
     return pages.length ? `${docName(file)} (${pages.length > 1 ? 'pages' : 'page'} ${upTo(pages, 4)})` : docName(file);
   });
   const where = parts.length > 2 ? `${parts.slice(0, 2).join(', ')} and ${parts.length - 2} more` : parts.join(' and ');
-  return `Found ${plural(hits.length, 'relevant passage')} in ${where}.`;
+  return `${plural(hits.length, 'relevant passage')} in ${where}`;
 }
+
+const webDomains = (hits) => [...new Set(hits.map((x) => x.url).filter((u) => safeUrl(u)).map(domain))];
 
 function beat(iconName, title, parts, state = 'done') {
   return h('li', { class: `beat beat--${state}` },
     h('span', { class: 'beat-icon' }, icon(iconName), h('span', { class: 'beat-badge', 'aria-hidden': 'true' }, state === 'warn' ? '!' : icon('check'))),
     h('p', { class: 'beat-text' }, h('span', { class: 'beat-title' }, title), ' ', parts));
 }
-const say = (text) => text && h('span', { class: 'beat-desc' }, `${text} `);
+const say = (text) => text && h('span', { class: 'beat-desc' }, `${text.replace(/…\.$/, '…')} `);
 const outcome = (text) => text && h('span', { class: 'beat-outcome' }, `${text} `);
 const cue = (text) => h('span', { class: 'beat-cue' }, icon('arrowUp'), text);
 
@@ -373,6 +387,22 @@ const BEATS = {
       : ok ? `${ev.verified} of ${ev.total} quotes found word-for-word in their sources.`
         : `${ev.verified} of ${ev.total} quotes confirmed${ev.retry ? ' — fixing the rest.' : '.'}`;
     return beat('shield', 'Double-checking every quote', say(text), ok ? 'done' : 'warn');
+  },
+  // agent mode
+  think: (ev) => beat('sparkle', 'Thinking', say(ev.summary || 'Deciding what to look up.')),
+  tool(ev, parallel) {
+    const hits = ev.chunks || [];
+    const query = String(ev.query || '');
+    // agents write long keyword queries; the narrator shows the start, technical details show it all
+    const q = `Searched for “${query.length > 60 ? `${query.slice(0, 60).replace(/\s+\S*$/, '')}…` : query}” — `;
+    const together = parallel && h('span', { class: 'beat-tag' }, 'at the same time');
+    if (ev.tool === 'search_web') {
+      const domains = webDomains(hits);
+      return beat('globe', 'Checking the web', [together, say(q + (domains.length ? `read pages from ${upTo(domains, 3)}.` : 'no useful pages turned up.'))]);
+    }
+    const deep = ev.depth === 'deep';
+    return beat(deep ? 'search' : 'book', deep ? 'Looking closer in your documents' : 'Reading your documents',
+      [together, say(q + (hits.length ? `found ${passagesIn(hits)}.` : 'nothing relevant turned up.'))]);
   },
 };
 BEATS.hybrid = BEATS.rag;
@@ -467,6 +497,14 @@ const STEPS = {
   },
 };
 STEPS.hybrid = STEPS.rag;
+STEPS.think = (ev) => card(ev, 'sparkle', `Round ${ev.round ?? '?'} · think`, 'agent plan', ev.summary && h('p', { class: 'reason' }, ev.summary));
+STEPS.tool = (ev) => {
+  const hits = ev.chunks || [];
+  return card(ev, ev.tool === 'search_web' ? 'globe' : ev.depth === 'deep' ? 'layers' : 'db', `Round ${ev.round ?? '?'} · ${ev.tool}`,
+    ev.depth ? `depth: ${ev.depth}` : '',
+    ev.query && block('Query', chips([ev.query], 'search')),
+    block(`Retrieved ${plural(hits.length, 'chunk')}`, hits.length ? hitList(hits) : h('p', { class: 'muted' }, 'Nothing relevant.')));
+};
 
 function renderStep(ev, query) {
   const make = STEPS[ev.node];
@@ -548,10 +586,10 @@ function renderAnswer(res, turnId) {
 
 let turnSeq = 0;
 
-function Turn(query, retry) {
+function Turn(query, retry, mode) {
   const id = ++turnSeq;
   const ladder = Ladder();
-  const label = h('span', { class: 'working-label' }, nextLabel());
+  const label = h('span', { class: 'working-label' }, nextLabel(null, mode));
   const clock = h('span', { class: 'working-time mono', 'aria-hidden': 'true' }, '0.0 s');
   // the step in progress: shimmering status + typing dots; finished steps are inserted above it
   const working = h('li', { class: 'beat beat--live' },
@@ -563,7 +601,7 @@ function Turn(query, retry) {
   const techLabel = h('span', {}, 'Show technical details');
   const tech = h('details', { class: 'tech', hidden: true }, h('summary', {}, icon('chevron', 'chev'), techLabel), steps);
   tech.addEventListener('toggle', () => { techLabel.textContent = `${tech.open ? 'Hide' : 'Show'} technical details`; });
-  const summary = h('span', { class: 'summary-text' }, 'Researching your question…');
+  const summary = h('span', { class: 'summary-text' }, mode === 'agent' ? 'The agent is working on it…' : 'Researching your question…');
   const timeline = h('details', { class: 'timeline', open: true },
     h('summary', {}, icon('chevron', 'chev'), summary),
     h('div', { class: 'timeline-body' }, ladder.el, story, tech));
@@ -576,6 +614,8 @@ function Turn(query, retry) {
   const t0 = performance.now();
   const timer = setInterval(() => { clock.textContent = secs((performance.now() - t0) / 1000); }, 100);
   let count = 0;
+  let tools = 0;
+  let prev = null; // last step, to spot agent tool calls that ran in parallel (same round)
   let lastT = 0;
   announce(label.textContent);
 
@@ -589,13 +629,16 @@ function Turn(query, retry) {
     el,
     step(ev) {
       count++;
+      if (ev.node === 'tool') tools++;
+      const parallel = ev.node === 'tool' && prev?.node === 'tool' && prev.round === ev.round;
+      prev = ev;
       lastT = Number(ev.t) || lastT;
       follow(() => {
-        story.insertBefore((BEATS[ev.node] || ((e) => beat('dot', String(e.node || 'Step'), [])))(ev), working);
+        story.insertBefore((BEATS[ev.node] || ((e) => beat('dot', String(e.node || 'Step'), [])))(ev, parallel), working);
         steps.append(renderStep(ev, query));
         tech.hidden = false;
         ladder.step(ev);
-        label.textContent = nextLabel(ev);
+        label.textContent = nextLabel(ev, mode);
       });
       announce(label.textContent);
     },
@@ -609,7 +652,10 @@ function Turn(query, retry) {
       ladder.final(res.tier);
       const t = TIER[res.tier];
       const tier = t?.found || res.tier;
-      summary.textContent = `${res.tier === 'knowledge' ? 'Answered' : 'Researched'} in ${plural(Math.max(count, 1), 'step')} · ${Math.round(res.seconds ?? lastT)} s · ${tier}`;
+      const took = `${Math.round(res.seconds ?? lastT)} s`;
+      summary.textContent = (res.mode || mode) === 'agent'
+        ? `Agent · ${tools ? plural(tools, 'tool call') : 'no tool calls'} · ${took} · ${tier}`
+        : `${state.agentOk ? 'Step by step · ' : ''}${res.tier === 'knowledge' ? 'Answered' : 'Researched'} in ${plural(Math.max(count, 1), 'step')} · ${took} · ${tier}`;
       timeline.open = false;
       const answer = renderAnswer(res, id);
       const sc = $('scroller');
@@ -630,7 +676,14 @@ function Turn(query, retry) {
 
 // ---------- chat ----------
 
-const state = { session: uuid(), ctrl: null };
+const state = { session: uuid(), ctrl: null, agentOk: false };
+const MODE_KEY = 'adaptive-rag-mode';
+const currentMode = () => (state.agentOk && document.querySelector('input[name="mode"]:checked')?.value === 'agent' ? 'agent' : 'ladder');
+try { // remembered per browser; storage may be unavailable (private mode, blocked cookies)
+  const saved = localStorage.getItem(MODE_KEY);
+  if (saved === 'agent' || saved === 'ladder') document.querySelector(`input[name="mode"][value="${saved}"]`).checked = true;
+} catch { /* default: step by step */ }
+$('mode').addEventListener('change', (e) => { try { localStorage.setItem(MODE_KEY, e.target.value); } catch { /* not remembered */ } });
 const thread = $('thread');
 const input = $('q');
 
@@ -641,11 +694,11 @@ function setBusy(busy) {
   for (const b of document.querySelectorAll('.example')) b.disabled = busy;
 }
 
-async function ask(raw) {
+async function ask(raw, mode = currentMode()) {
   const query = String(raw || '').trim();
   if (!query || state.ctrl) return;
   $('empty').hidden = true;
-  const turn = Turn(query, () => { if (state.ctrl) return; turn.el.remove(); ask(query); });
+  const turn = Turn(query, () => { if (state.ctrl) return; turn.el.remove(); ask(query, mode); }, mode);
   thread.append(turn.el);
   $('scroller').scrollTop = $('scroller').scrollHeight;
   const ctrl = state.ctrl = new AbortController();
@@ -655,7 +708,7 @@ async function ask(raw) {
     const res = await fetch('/rag/query/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-      body: JSON.stringify({ query, session_id: state.session }),
+      body: JSON.stringify({ query, session_id: state.session, ...(state.agentOk && { mode }) }),
       signal: ctrl.signal,
     });
     if (!res.ok || !res.body) throw new Error(await apiError(res));
@@ -737,6 +790,8 @@ async function loadInfo() {
   const env = $('env');
   try {
     const info = await getJSON('/rag/info');
+    state.agentOk = Array.isArray(info.modes) && info.modes.includes('agent');
+    $('mode').hidden = !state.agentOk;
     env.replaceChildren(
       h('li', { class: 'env-chip', title: 'Language model backend' }, h('span', { class: 'dot dot--ok' }), h('span', { class: 'muted' }, 'LLM'), info.llm || '?'),
       h('li', { class: 'env-chip', title: 'Web search provider (Tier 3)' }, h('span', { class: 'dot dot--ok' }), h('span', { class: 'muted' }, 'Web'), WEB_NAMES[info.web] || info.web || '?'));

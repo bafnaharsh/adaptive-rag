@@ -3,7 +3,9 @@ End-to-end eval on the iPhone manuals: ingest data/manuals/*.pdf (idempotent), r
 eval/iphone_questions.yaml through the full pipeline (graph_builder.answer) with the configured LLM backend, and
 score routing, grounding and citations. Writes eval/REPORT.md and eval/results.json.
 
-    .venv/Scripts/python.exe scripts/run_eval.py [--only id1,id2]
+    .venv/Scripts/python.exe scripts/run_eval.py [--only id1,id2] [--mode ladder|agent]
+
+Agent mode writes eval/REPORT_agent.md and eval/results_agent.json.
 """
 
 import argparse
@@ -19,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.core.config import settings  # noqa: E402
-from src.rag import store  # noqa: E402
+from src.rag import agent, store  # noqa: E402
 from src.rag.graph_builder import answer  # noqa: E402
 
 
@@ -48,7 +50,10 @@ def score(q: dict, r: dict) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", default="")
+    ap.add_argument("--mode", choices=["ladder", "agent"], default="ladder")
     args = ap.parse_args()
+    run = agent.answer if args.mode == "agent" else answer
+    suffix = "" if args.mode == "ladder" else f"_{args.mode}"
     sys.stdout.reconfigure(encoding="utf-8")  # Windows consoles default to cp1252, which has no ✓/⚠
 
     for pdf in sorted((ROOT / "data" / "manuals").glob("*.pdf")):
@@ -63,17 +68,17 @@ def main() -> None:
     rows = []
     for q in questions:
         t = time.time()
-        r = answer(q["question"])
+        r = run(q["question"])
         took = time.time() - t
         s = score(q, r)
         rows.append({**q, "result": r, **s, "seconds": round(took, 1)})
         cited = ", ".join(f"{c['label']}{'✓' if c.get('verified') else '⚠'}" for c in r["citations"]) or "-"
         print(f"[{'PASS' if s['passed'] else 'FAIL'}] {q['id']} tier={r['tier']} {took:.0f}s cites={cited} {s['checks']}")
 
-    (ROOT / "eval" / "results.json").write_text(json.dumps(rows, indent=2, ensure_ascii=False), encoding="utf-8")
+    (ROOT / "eval" / f"results{suffix}.json").write_text(json.dumps(rows, indent=2, ensure_ascii=False), encoding="utf-8")
     passed = sum(r["passed"] for r in rows)
     lines = [
-        "# iPhone manuals: end-to-end eval",
+        f"# iPhone manuals: end-to-end eval ({args.mode} mode)",
         "",
         f"LLM backend: `{settings.LLM_MODEL}` (model `{settings.CLI_MODEL or 'CLI default'}`). "
         f"Passed **{passed}/{len(rows)}**. Median latency {sorted(r['seconds'] for r in rows)[len(rows) // 2]} s.",
@@ -94,8 +99,8 @@ def main() -> None:
         lines += [f"### {r['id']}: {r['question']}", "", f"Tier: {r['result']['tier']}", "",
                   r["result"]["rendered"], "", "<details><summary>Trace</summary>", "",
                   *[f"- {t}" for t in r["result"]["trace"]], "", "</details>", ""]
-    (ROOT / "eval" / "REPORT.md").write_text("\n".join(lines), encoding="utf-8")
-    print(f"\n{passed}/{len(rows)} passed -> eval/REPORT.md")
+    (ROOT / "eval" / f"REPORT{suffix}.md").write_text("\n".join(lines), encoding="utf-8")
+    print(f"\n{passed}/{len(rows)} passed -> eval/REPORT{suffix}.md")
 
 
 if __name__ == "__main__":

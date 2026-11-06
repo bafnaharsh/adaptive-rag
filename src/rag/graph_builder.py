@@ -100,6 +100,13 @@ def plan(s: State) -> dict:
     return out
 
 
+def _parse_answer(d: dict) -> tuple[str, list[dict]]:
+    """(answer markdown, [{n, source_id, quote}]) from a judge, generate or agent reply."""
+    cits = [{"n": int(c.get("n") or 0), "source_id": str(c.get("source_id") or ""), "quote": str(c.get("quote") or "")}
+            for c in d.get("citations") or [] if isinstance(c, dict)]
+    return str(d.get("answer") or ""), cits
+
+
 def _hits(chunks: list[Chunk]) -> list[dict]:
     """Retrieved chunks as the UI shows them."""
     return [{"id": c.id, "label": c.label(), "source": c.source, "page": c.page, "score": round(c.score, 3),
@@ -120,15 +127,22 @@ def _judge(s: State, tier: str, head: str, found: list[Chunk], queries: list[str
     d["reasoning"] = re.sub(r"\b(?:doc|web):\w+", lambda m: labels.get(m.group().lower(), m.group()),
                             str(d.get("reasoning", "")), flags=re.I)
     ok = str(d.get("sufficient")).lower() == "true"
-    doc_q, web_q = ([q for q in d.get(key) or [] if isinstance(q, str) and q.strip()][:3]
+    # Sufficient evidence: the judge already wrote the answer, which saves the separate generate call (one model
+    # round trip); verify then checks it like any other, and a failed check retries through generate.
+    answered = ok and bool(str(d.get("answer") or "").strip())
+    drafted = dict(zip(("answer", "citations"), _parse_answer(d))) | {"attempts": 1} if answered else {}
+    doc_q, web_q =([q for q in d.get(key) or [] if isinstance(q, str) and q.strip()][:3]
                     for key in ("search_documents", "search_web"))
     verdict = "sufficient" if ok else f"insufficient — {d.get('missing') or 'more evidence needed'}"
     if not ok:
         verdict += f" → next: documents {doc_q}, web {web_q}"
         if tier == "rag" and web_q and not doc_q:
             verdict += " (the documents don't cover the rest: skip the deeper document search)"
+    trace = [f"{head} → judge: {verdict}", f"Reasoning: {d.get('reasoning', '')}"]
+    if answered:
+        trace.append(f"Generate (with the judge): {len(drafted['citations'])} citations")
     return {"tier": tier, "evidence": evidence, "sufficient": ok, "doc_queries": doc_q, "web_queries": web_q,
-            "trace": [f"{head} → judge: {verdict}", f"Reasoning: {d.get('reasoning', '')}"],
+            "answered": answered, **drafted, "trace": trace,
             "step": step | {"verdict": "sufficient" if ok else "insufficient", "reasoning": str(d.get("reasoning", "")),
                             "summary": str(d.get("summary") or ""),
                             "look_next": None if ok else ("documents" if doc_q or not web_q else "web"),
@@ -191,10 +205,8 @@ def generate(s: State) -> dict:
                     "citations": [{k: c[k] for k in ("n", "source_id", "quote")} for c in s["citations"]]}
         prompt += "\n\n" + PROMPTS.prompt("regenerate").format(
             problems=feedback, previous=json.dumps(previous, ensure_ascii=False))
-    d = llm.ask_json(prompt)
-    cits = [{"n": int(c.get("n") or 0), "source_id": str(c.get("source_id") or ""), "quote": str(c.get("quote") or "")}
-            for c in d.get("citations") or [] if isinstance(c, dict)]
-    return {"answer": str(d.get("answer") or ""), "citations": cits, "attempts": attempts,
+    answer, cits = _parse_answer(llm.ask_json(prompt))
+    return {"answer": answer, "citations": cits, "attempts": attempts,
             "trace": [f"Generate{' (retry with verification feedback)' if feedback else ''}: {len(cits)} citations"],
             "step": step | {"citations": len(cits)}}
 
@@ -228,11 +240,12 @@ graph.add_conditional_edges("plan", lambda s: s["route"], {"knowledge": END, "do
 # After Tier 1 a deeper document search (Tier 2) runs only when some missing part is likely in the documents; when
 # the judge says the rest is only on the web, Tier 2 would just cost time.
 graph.add_conditional_edges(
-    "rag", lambda s: "sufficient" if s["sufficient"] else
+    "rag", lambda s: ("answered" if s.get("answered") else "sufficient") if s["sufficient"] else
     "web" if s.get("web_queries") and not s.get("doc_queries") else "documents",
-    {"sufficient": "generate", "documents": "hybrid", "web": "web"})
-graph.add_conditional_edges("hybrid", lambda s: "sufficient" if s["sufficient"] else "insufficient",
-                            {"sufficient": "generate", "insufficient": "web"})
+    {"answered": "verify", "sufficient": "generate", "documents": "hybrid", "web": "web"})
+graph.add_conditional_edges(
+    "hybrid", lambda s: ("answered" if s.get("answered") else "sufficient") if s["sufficient"] else "insufficient",
+    {"answered": "verify", "sufficient": "generate", "insufficient": "web"})
 graph.add_edge("web", "generate")  # the last tier: no judge, generate says what the evidence does not cover
 graph.add_edge("generate", "verify")
 graph.add_conditional_edges("verify", lambda s: "retry" if s.get("feedback") else "done",

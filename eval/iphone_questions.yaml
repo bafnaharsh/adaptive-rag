@@ -26,7 +26,7 @@
   expected_tiers: [rag, hybrid]
   doc: iphone_user_guide.pdf
   pages: [46]
-  keywords: ["Lost Mode", "Play Sound", "Erase iPhone"]
+  keywords: ["Lost Mode", "sound", "erase"]  # answers say "play a sound", "erase the phone"
 
 - id: ug_burst
   question: How do I take burst photos with the iPhone camera?
@@ -43,7 +43,7 @@
   # so also fetching the current method from the web is correct. The guide page must still be cited.
   expected_tiers: [rag, hybrid, web]
   doc: iphone_user_guide.pdf
-  pages: [96]
+  pages: [96, 170]  # p. 170 (accessibility) repeats the Sleep/Wake + Home button method
   keywords: ["screenshot", "Home buttons"]
 
 - id: ug_force_restart

@@ -180,6 +180,22 @@ def test_llm_failure_returns_error_answer(env, failure):
     assert r["trace"][0].startswith("Plan:") and r["trace"][-1] == f"Error: {type(failure).__name__}: {failure}"
 
 
+def test_judge_that_answers_skips_generate(env):
+    env.replies |= {"plan": [plan("documents")], "judge": [judge(True) | GOOD]}
+    events = list(graph_builder.stream_answer(Q))
+    assert [d["node"] for kind, d in events if kind == "step"] == ["plan", "rag", "verify"]
+    assert kinds(env) == ["plan", "judge"]  # one model call fewer than plan, judge, generate
+    final = events[-1][1]
+    assert final["tier"] == "rag" and final["verified"] is True and final["citations"][0]["page"] == 42
+
+
+def test_judge_answer_with_bad_quote_retries_through_generate(env):
+    bad = {"answer": GOOD["answer"], "citations": [{"n": 1, "source_id": "doc:1", "quote": "lasts a whole week easily"}]}
+    env.replies |= {"plan": [plan("documents")], "judge": [judge(True) | bad], "generate": [GOOD]}
+    r = graph_builder.answer(Q)
+    assert kinds(env) == ["plan", "judge", "generate"] and r["verified"] is True
+
+
 def test_judge_sends_off_topic_question_straight_to_web(env):
     env.replies |= {"plan": [plan("documents")],
                     "judge": [judge(False) | {"search_web": ["iPhone 17 battery capacity mAh"]}],

@@ -15,7 +15,7 @@ from src.models.evidence import Chunk
 from src.rag import store
 
 _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; adaptive-rag/1.0)"}
-_FETCH = 4
+_FETCH = 3  # pages fetched per search: each one costs up to the timeout below
 _MAX_PAGE_CHARS = 20_000  # shortcut: only the start of long pages is reranked (CPU cost); raise if answers get cut
 
 
@@ -43,7 +43,7 @@ def _search(query: str) -> list[dict]:
 def _fetch(url: str) -> tuple[str, str]:
     """(page title, visible text) or ("", "") when the page is unreachable or not HTML."""
     try:
-        resp = requests.get(url, headers=_HEADERS, timeout=8)
+        resp = requests.get(url, headers=_HEADERS, timeout=5)
         if not resp.ok or "html" not in resp.headers.get("content-type", ""):
             return "", ""
         soup = BeautifulSoup(resp.content, "html.parser")  # bytes, so bs4 honours the page's own charset

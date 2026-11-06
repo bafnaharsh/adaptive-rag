@@ -13,6 +13,16 @@ Every answer is grounded: each claim carries `[n]`, each citation names its sour
 and a deterministic checker confirms the quote really is in that source (PDF: file + page, web: URL). Failed
 citations trigger one regeneration with the failures as feedback; anything still unverified is flagged, never hidden.
 
+Two modes, picked per question in the UI ("Step by step" | "Agent") or with `"mode"` in the API body:
+
+- **Step by step (default, `ladder`)**: the fixed ladder above. After each document tier an LLM judge reasons about the
+  evidence and sorts every missing part into "search the documents deeper" or "only on the web"; when the evidence is
+  enough, the judge writes the answer in the same call. Fastest and most accurate: 20/20, median 7.6 s on the eval.
+- **Agent (`agent`)**: the model gets the pieces as tools (`search_documents` quick or deep, `search_web`) and decides
+  each round what to call; the calls of a round run in parallel (up to 2 search rounds), then it answers. Same quote
+  verification. Slower on simple questions, strongest on multi-part ones ("megapixels + who makes them + how to
+  replace them": specs from the web and the procedure pages from the manual in one answer).
+
 ```mermaid
 graph TD
   start([question]) --> plan
@@ -111,10 +121,15 @@ tests/                 offline unit tests (pytest)
 The eval uses two Apple manuals (not committed, see [eval/SOURCES.md](eval/SOURCES.md) to download):
 the iPhone User Guide (196 pages) and the iPhone 16 repair manual (214 pages), with 20 questions across all tiers.
 
-Latest run (2026-11-06, `cli:claude` = Claude Haiku via the CLI, no key): **19/20 passed**, 54/54 citations verified,
-the expected manual page cited for 14/14 document questions, tiers used: 11 rag, 2 hybrid, 3 knowledge, 4 web,
-median 7.9 s per answer. The one miss is the checker's literal keywords: the answer says "Play a sound" and "Erase the
-phone" where it expects "Play Sound" and "Erase iPhone". Full answers and traces: [eval/REPORT.md](eval/REPORT.md).
+Latest runs (2026-11-06, `cli:claude` = Claude Haiku via the CLI, no key):
+
+| Mode | Passed | Citations verified | Expected manual page cited | Median per answer | Report |
+|---|---|---|---|---|---|
+| Step by step (ladder) | **20/20** | 37/37 | 14/14 | 7.6 s | [eval/REPORT.md](eval/REPORT.md) |
+| Agent | 18/20 | 63/63 | 12/14 | 10.2 s | [eval/REPORT_agent.md](eval/REPORT_agent.md) |
+
+The agent's two misses cited a neighbouring page (p. 186 for the force-restart steps on p. 187) and missed the
+part-numbers table, which the ladder's fused rerank order finds.
 
 Routing rules learned from real use: well-known facts ("who makes the iPhone") are answered from model knowledge even
 when they touch the documents' subject; after Tier 1 the judge sorts each missing part into "search the documents

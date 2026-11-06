@@ -110,7 +110,14 @@
             <svg class="i stop-i" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
           </button>
         </form>
-        <p class="hint"><kbd>Enter</kbd> to send · <kbd>Shift</kbd> + <kbd>Enter</kbd> for a new line</p>
+        <div class="composer-meta">
+          <fieldset class="seg" id="mode" hidden>
+            <legend class="sr-only">How to answer</legend>
+            <label title="A fixed research ladder: your documents first, then a deeper search, then the web"><input class="sr-only" type="radio" name="mode" value="ladder" checked><span>Step by step</span></label>
+            <label title="An AI agent decides which searches to run, several at once"><input class="sr-only" type="radio" name="mode" value="agent"><span>Agent</span></label>
+          </fieldset>
+          <p class="hint"><kbd>Enter</kbd> to send · <kbd>Shift</kbd> + <kbd>Enter</kbd> for a new line</p>
+        </div>
       </div>
     </main>
   </div>

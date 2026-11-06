@@ -17,7 +17,7 @@ from src.core.config import settings
 from src.core.logger import logger
 from src.memory import get_session_history
 from src.models.query_request import QueryRequest
-from src.rag import graph_builder, store
+from src.rag import agent, graph_builder, store
 
 router = APIRouter()
 
@@ -40,7 +40,8 @@ async def rag_query(req: QueryRequest):
     earlier = (await history.aget_messages())[-HISTORY_MESSAGES:]
     try:
         # answer() is blocking (LLM + retrieval calls), so keep it off the event loop
-        result = await asyncio.to_thread(graph_builder.answer, req.query, earlier)
+        answer = agent.answer if req.mode == "agent" else graph_builder.answer
+        result = await asyncio.to_thread(answer, req.query, earlier)
     except Exception as e:
         logger.exception("answer() failed")
         raise HTTPException(status_code=500, detail=str(e) or type(e).__name__)
@@ -58,7 +59,8 @@ async def rag_query_stream(req: QueryRequest):
     async def events():
         try:
             # stream_answer() blocks on LLM and retrieval calls: advance it in the threadpool, off the event loop
-            async for kind, data in iterate_in_threadpool(graph_builder.stream_answer(req.query, earlier)):
+            stream = agent.stream_agent if req.mode == "agent" else graph_builder.stream_answer
+            async for kind, data in iterate_in_threadpool(stream(req.query, earlier)):
                 if kind == "final":
                     data = {**data, "session_id": req.session_id}
                     await history.aadd_messages([HumanMessage(content=req.query), AIMessage(content=data["answer"])])
@@ -73,7 +75,8 @@ async def rag_query_stream(req: QueryRequest):
 
 @router.get("/rag/info")
 async def info():
-    return {"llm": settings.LLM_MODEL, "web": "tavily" if settings.TAVILY_API_KEY else "duckduckgo"}
+    return {"llm": settings.LLM_MODEL, "web": "tavily" if settings.TAVILY_API_KEY else "duckduckgo",
+            "modes": ["ladder", "agent"]}
 
 
 @router.post("/rag/documents/upload")

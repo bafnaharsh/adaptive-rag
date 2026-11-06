@@ -20,6 +20,7 @@ class State(TypedDict, total=False):
     tier: str                    # deepest tier that ran: knowledge | rag | hybrid | web
     evidence: list[Chunk]        # merged across tiers, best first
     sufficient: bool             # the judge's verdict on the evidence so far
+    answered: bool               # the judge also wrote the answer (sufficient evidence): skip generate
     doc_queries: list[str]       # the judge's queries for missing parts the documents likely cover (Tier 2)
     web_queries: list[str]       # the judge's queries for missing parts only the web has (Tier 3)
     answer: str
