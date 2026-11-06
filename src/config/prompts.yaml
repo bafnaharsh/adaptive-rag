@@ -98,6 +98,7 @@ prompts:
     How to work:
     - Well-known, non-time-sensitive facts (who makes the iPhone, what USB stands for): answer at once with knowledge_answer, no searching.
     - Anything a user expects from their documents (procedures, settings, values, part numbers, warnings) comes from search_documents first; search_web only for the parts the documents do not cover.
+    - Skip search_documents for parts about products, versions or facts the documents clearly do not describe (a newer model, specifications, prices, news): go straight to search_web.
     - A question with several parts: one search per part, all in the same round.
     - Write each query the way a manual or web page would phrase it, about the specific product in the conversation.
     - parts: in your first reply split the question into 1-4 parts a non-technical user would recognise (short plain labels of 3-7 words); tag every tool call with the part it serves ("part": "p2"); in every reply give each part's status (pending, found, partial or missing), a note of under 15 plain words, and the ids of the sources that answer it.

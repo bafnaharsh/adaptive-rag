@@ -326,6 +326,7 @@ def save_web_chunks(chunks: list[Chunk]) -> None:
 
 
 def warm() -> None:
-    """Load both models and the embedding matrix now (a few seconds) instead of on the first question."""
+    """Load both models and the embedding matrix now instead of on the first question. The reranker must also run
+    once: its first inference in a process took ~13 s (ONNX session start), later ones ~2.5 s for 49 passages."""
     dense_search("warm up", 1)
-    _reranker()
+    list(_reranker().rerank("warm up", ["warm up the cross-encoder"]))

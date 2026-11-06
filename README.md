@@ -88,7 +88,7 @@ Follow-up questions work: the planner rewrites them into standalone questions fr
 |---|---|---|
 | `LLM_MODEL` | `cli:claude` | LLM backend chain (see above) |
 | `CLI_MODEL` | per CLI (`haiku`, `gemini-3.8-flash-medium`, `auto`) | model flag for `cli:*` |
-| `TAVILY_API_KEY` | empty | use Tavily instead of DuckDuckGo |
+| `TAVILY_API_KEY` | empty | use Tavily instead of the free DDGS search (free tier: 1,000 searches/month). Recommended: the free engines rate-limit busy machines, so a web step takes ~8-10 s (search ~3 s per pass, page fetch ~1.5 s, rerank ~2 s) and sometimes finds nothing |
 | `MONGO_URL` | empty | persist chat history in MongoDB (`pip install motor`); default is in-memory |
 | `DATA_DIR` | `./data` | SQLite index, uploads, model cache, conversation log |
 

@@ -3,7 +3,6 @@ Tier 3: web search. Tavily when settings.TAVILY_API_KEY is set, otherwise DuckDu
 """
 
 import hashlib
-import time
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
@@ -16,7 +15,11 @@ from src.rag import store
 
 _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; adaptive-rag/1.0)"}
 _FETCH = 3  # pages fetched per search: each one costs up to the timeout below
-_MAX_PAGE_CHARS = 20_000  # shortcut: only the start of long pages is reranked (CPU cost); raise if answers get cut
+# shortcut: measured from this machine on 2026-11-06, "auto" answered 3/5 (~3 s each pass), yahoo 1/5, duckduckgo,
+# brave, mojeek and startpage 0/5. Set TAVILY_API_KEY for a reliable ~1-2 s search.
+_BACKENDS = ("auto", "auto", "yahoo")
+# shortcut: only the start of long pages is reranked (~1 s per 20 passages on this CPU); raise if answers get cut
+_MAX_PAGE_CHARS = 12_000
 
 
 def _search(query: str) -> list[dict]:
@@ -27,17 +30,17 @@ def _search(query: str) -> list[dict]:
         hits = TavilyClient(api_key=settings.TAVILY_API_KEY).search(query, max_results=8)["results"]
         return [{"url": h["url"], "title": h.get("title", ""), "snippet": h.get("content", "")} for h in hits]
     from ddgs import DDGS
-    from ddgs.exceptions import DDGSException
 
-    for attempt in range(3):
+    # Free backends refuse at random; retrying with back-off sleeps cost ~15 s per failed search. Each pass below takes
+    # ~3 s and nothing sleeps, so a search that finds nothing gives up after ~7 s.
+    for backend in _BACKENDS:
         try:
-            hits = DDGS().text(query, max_results=8)
-            break
-        except DDGSException:  # backends rate-limit bursts at random; a later "auto" pass usually lands on a working one
-            if attempt == 2:
-                raise
-            time.sleep(1.5 * (attempt + 1))
-    return [{"url": h["href"], "title": h.get("title", ""), "snippet": h.get("body", "")} for h in hits]
+            hits = DDGS().text(query, max_results=8, backend=backend)
+        except Exception:  # refused or rate-limited: the next pass may land on a backend that answers
+            continue
+        if hits:
+            return [{"url": h["href"], "title": h.get("title", ""), "snippet": h.get("body", "")} for h in hits]
+    raise RuntimeError("no search backend returned results")
 
 
 def _fetch(url: str) -> tuple[str, str]:
