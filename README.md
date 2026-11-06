@@ -17,7 +17,7 @@ Two modes, picked per question in the UI ("Step by step" | "Agent") or with `"mo
 
 - **Step by step (default, `ladder`)**: the fixed ladder above. After each document tier an LLM judge reasons about the
   evidence and sorts every missing part into "search the documents deeper" or "only on the web"; when the evidence is
-  enough, the judge writes the answer in the same call. Fastest and most accurate: 20/20, median 7.6 s on the eval.
+  enough, the judge writes the answer in the same call. Fastest and most accurate: 20/20, median 7.0 s on the eval.
 - **Agent (`agent`)**: the model gets the pieces as tools (`search_documents` quick or deep, `search_web`) and decides
   each round what to call; the calls of a round run in parallel (up to 2 search rounds), then it answers. Same quote
   verification. Slower on simple questions, strongest on multi-part ones ("megapixels + who makes them + how to
@@ -65,8 +65,11 @@ uv pip install --python .venv/Scripts/python.exe -r requirements.txt   # .venv/b
 .venv/Scripts/python.exe -m uvicorn src.main:app
 ```
 
-Upload a PDF/TXT/MD in the sidebar, then ask. While the answer is researched, every step appears live as a card
-(plan, each tier's retrieved chunks and the judge's step-by-step verdict, web results, generation, citation check).
+Upload a PDF/TXT/MD in the sidebar, then ask. While the answer is researched, a live **research board** (generative
+UI) shows what is happening: the model splits the question into plainly labelled parts, each part flips from
+researching to found / partly found / not found with a short note and the page or web tiles that answered it, and
+every search appears as its own card nested under the part it serves (broad searches in a "looking across all parts"
+lane). The tier pills light up as the research escalates; when done the board collapses to one line.
 The answer's `[n]` chips show the verbatim quote and its page or link; sources are marked ✓ verified or ⚠.
 Every answered turn is appended to `data/conversations.jsonl` (question, answer, citations, trace) for later review.
 
@@ -125,7 +128,7 @@ Latest runs (2026-11-06, `cli:claude` = Claude Haiku via the CLI, no key):
 
 | Mode | Passed | Citations verified | Expected manual page cited | Median per answer | Report |
 |---|---|---|---|---|---|
-| Step by step (ladder) | **20/20** | 37/37 | 14/14 | 7.6 s | [eval/REPORT.md](eval/REPORT.md) |
+| Step by step (ladder) | **20/20** | 43/43 | 14/14 | 7.0 s | [eval/REPORT.md](eval/REPORT.md) |
 | Agent | 18/20 | 63/63 | 12/14 | 10.2 s | [eval/REPORT_agent.md](eval/REPORT_agent.md) |
 
 The agent's two misses cited a neighbouring page (p. 186 for the force-restart steps on p. 187) and missed the
