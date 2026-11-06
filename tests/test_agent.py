@@ -60,6 +60,21 @@ def test_parallel_tools_then_verified_answer(env):
     assert 'id="doc:7"' in env.prompts[1] and 'id="web:ab12"' in env.prompts[1]  # the answer round sees all evidence
 
 
+def test_agent_board_and_part_tagged_tools(env):
+    env.replies = [{"thought": "Two parts.", "parts": [{"id": "p1", "label": "Camera megapixels", "status": "pending"},
+                                                      {"id": "p2", "label": "How to replace it", "status": "pending"}],
+                    "actions": [{"tool": "search_web", "query": "iPhone 16 camera megapixels", "part": "p1"},
+                                {"tool": "search_documents", "query": "camera removal", "depth": "quick", "part": "p2"}]},
+                   GOOD | {"parts": [{"id": "p1", "status": "found", "note": "48MP main", "sources": ["web:ab12"]},
+                                     {"id": "p2", "status": "found", "note": "Lift the flex cables", "sources": ["doc:7"]}]}]
+    events = list(agent.stream_agent("camera MP and how to replace it"))
+    steps = [d for kind, d in events if kind == "step"]
+    assert [p["label"] for p in steps[0]["parts"]] == ["Camera megapixels", "How to replace it"]
+    assert {s["part"] for s in steps if s["node"] == "tool"} == {"p1", "p2"}
+    final = events[-1][1]
+    assert [(p["status"], p["sources"][0]["id"]) for p in final["parts"]] == [("found", "web:ab12"), ("found", "doc:7")]
+
+
 def test_fabricated_quote_gets_one_retry_with_feedback(env):
     bad = GOOD | {"citations": [GOOD["citations"][0], {"n": 2, "source_id": "doc:7", "quote": "unplug the camera gently"}]}
     env.replies = [{"thought": "Search.", "actions": [{"tool": "search_documents", "query": "camera", "depth": "deep"},

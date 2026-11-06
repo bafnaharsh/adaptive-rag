@@ -21,33 +21,41 @@ prompts:
        - "documents": the indexed documents are likely to contain the answer (judge by the document descriptions and the closest passages), or the question has several parts and ANY part is likely answered by them (the other parts are searched on the web afterwards). Prefer this when unsure.
        - "web": no part of the answer is likely in these documents: current or external information, news, prices, release dates, or specifications and products the documents do not describe, even when the topic is related.
     3. answer: the full answer in markdown if route is "knowledge", otherwise "".
+    4. parts: the question split into 1-4 parts a non-technical user would recognise, each a short plain label of 3-7 words (e.g. "Megapixels of each camera", "How to replace them"). A simple question is one part.
 
     Return only JSON:
-    {{"standalone_question": "...", "reasoning": "one short sentence", "route": "knowledge | documents | web", "summary": "what you will do and why, in under 15 plain words for a non-technical user, e.g. This is about iPhone repair, so I will check your manuals first.", "answer": ""}}
+    {{"standalone_question": "...", "reasoning": "one short sentence", "route": "knowledge | documents | web", "summary": "what you will do and why, in under 15 plain words for a non-technical user, e.g. This is about iPhone repair, so I will check your manuals first.", "parts": [{{"id": "p1", "label": "..."}}], "answer": ""}}
 
   judge: |
     Decide whether the evidence below is enough to answer the question completely and accurately.
 
     Question: {question}
 
+    Parts of the question:
+    {parts}
+
     Evidence:
     {evidence}
 
     Reason step by step in 2-4 short sentences: what the relevant sources (by id) say about the question, then what the question asks that no source covers. Sufficient means every part can be answered from this evidence alone, without guessing.
     A source that states the answer directly is enough: do not hold out for a figure, the same statement repeated in another step, or confirmation from a second source.
-    If not sufficient, write one search query per missing part (at most 3, never for parts the evidence already answers), worded the way a manual or web page would say it, and put each in the right list:
+    For every part give its status (found, partial or missing), a note of under 15 plain words for a non-technical user (no ids or jargon), and the ids of the sources that answer it.
+    If not sufficient, write one search query per missing part (at most 3, never for parts the evidence already answers), tagged with that part's id, worded the way a manual or web page would say it, and put each in the right list:
     - search_documents: missing parts these documents are likely to cover. Any precise detail about something the documents describe (a limit, value, part number, tool, warning or step of a procedure in them) counts: a sharper search often finds it in another section;
     - search_web: missing parts these documents would not contain at all (marketing specifications such as megapixels, battery mAh or screen size, prices, news, suppliers, other products, newer facts).
 
     If sufficient, also write the final answer now, from this evidence only: markdown with [n] right after each claim; each citation gives the source id and a quote copied character for character from that source (5-30 words, "..." only to skip words); every [n] needs a citation and every citation an [n]; no sources list or source ids in the answer text (the app lists sources itself). If not sufficient, leave answer empty and citations [].
 
     Return only JSON:
-    {{"reasoning": "...", "sufficient": true | false, "missing": "what is still needed, or empty", "search_documents": ["..."], "search_web": ["..."], "summary": "the verdict in under 20 plain words for a non-technical user, no ids or jargon, e.g. The manual lists the warning signs but not what to do once smoke appears.", "answer": "", "citations": [{{"n": 1, "source_id": "doc:12", "quote": "exact words from that source"}}]}}
+    {{"reasoning": "...", "sufficient": true | false, "missing": "what is still needed, or empty", "parts": [{{"id": "p1", "status": "found | partial | missing", "note": "...", "sources": ["doc:12"]}}], "search_documents": [{{"part": "p2", "query": "..."}}], "search_web": [{{"part": "p3", "query": "..."}}], "summary": "the verdict in under 20 plain words for a non-technical user, no ids or jargon, e.g. The manual lists the warning signs but not what to do once smoke appears.", "answer": "", "citations": [{{"n": 1, "source_id": "doc:12", "quote": "exact words from that source"}}]}}
 
   generate: |
     Answer the question using ONLY the evidence below, never outside knowledge.
 
     Question: {question}
+
+    Parts of the question:
+    {parts}
 
     Evidence:
     {evidence}
@@ -57,9 +65,10 @@ prompts:
     - Each citation gives the source id and a quote: the exact words in that source that support the claim, copied character for character (one sentence or phrase, about 5-30 words). Never paraphrase a quote; use "..." only to skip words inside it.
     - Every [n] in the answer needs a citation, and every citation needs an [n] in the answer. No sources list or source ids in the answer text: the app lists the sources itself.
     - If the evidence does not answer the question, or only part of it, say so plainly instead of guessing, and still cite what partly helps.
+    - parts: for every part, its status in your answer (found, partial or missing), a note of under 15 plain words, and the ids of the sources you used for it.
 
     Return only JSON:
-    {{"answer": "markdown with [n] markers", "citations": [{{"n": 1, "source_id": "doc:12", "quote": "exact words from that source"}}]}}
+    {{"answer": "markdown with [n] markers", "citations": [{{"n": 1, "source_id": "doc:12", "quote": "exact words from that source"}}], "parts": [{{"id": "p1", "status": "found | partial | missing", "note": "...", "sources": ["doc:12"]}}]}}
 
   regenerate: |
     Your previous reply failed citation checking:
@@ -91,6 +100,10 @@ prompts:
     - Anything a user expects from their documents (procedures, settings, values, part numbers, warnings) comes from search_documents first; search_web only for the parts the documents do not cover.
     - A question with several parts: one search per part, all in the same round.
     - Write each query the way a manual or web page would phrase it, about the specific product in the conversation.
+    - parts: in your first reply split the question into 1-4 parts a non-technical user would recognise (short plain labels of 3-7 words); tag every tool call with the part it serves ("part": "p2"); in every reply give each part's status (pending, found, partial or missing), a note of under 15 plain words, and the ids of the sources that answer it.
+
+    Parts so far:
+    {parts}
 
     Searches so far:
     {log}
@@ -101,7 +114,7 @@ prompts:
     Search rounds left: {rounds_left}. Answer as soon as the evidence covers every part, or when no rounds are left.
 
     Return only JSON, exactly one of:
-    {{"thought": "what you will do next, under 20 plain words for a non-technical user", "actions": [{{"tool": "...", "query": "..."}}]}}
-    {{"thought": "...", "answer": "markdown with [n] right after each claim", "citations": [{{"n": 1, "source_id": "doc:12", "quote": "exact words copied from that source"}}]}}
-    {{"thought": "...", "knowledge_answer": "markdown answer from general knowledge"}}
+    {{"thought": "what you will do next, under 20 plain words for a non-technical user", "parts": [{{"id": "p1", "label": "...", "status": "pending", "note": "", "sources": []}}], "actions": [{{"tool": "...", "query": "...", "part": "p1"}}]}}
+    {{"thought": "...", "parts": [...], "answer": "markdown with [n] right after each claim", "citations": [{{"n": 1, "source_id": "doc:12", "quote": "exact words copied from that source"}}]}}
+    {{"thought": "...", "parts": [...], "knowledge_answer": "markdown answer from general knowledge"}}
     Answer rules: use ONLY the evidence; every [n] needs a citation and every citation an [n]; no sources list or source ids in the answer text; copy quotes character for character (5-30 words, "..." only to skip words); say plainly what the evidence does not cover instead of guessing.

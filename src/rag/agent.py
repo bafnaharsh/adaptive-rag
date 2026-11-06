@@ -15,8 +15,8 @@ from src.core.logger import logger
 from src.llms import llm
 from src.models.evidence import Chunk
 from src.rag import citations, store, web
-from src.rag.graph_builder import (KNOWLEDGE_NOTE, MAX_CHUNKS, NO_EVIDENCE, PROMPTS, ROLE, _evidence, _found, _hits,
-                                   _merge, _read_on, _short, generate, verify)
+from src.rag.graph_builder import (KNOWLEDGE_NOTE, MAX_CHUNKS, NO_EVIDENCE, PROMPTS, ROLE, _board_text, _evidence,
+                                   _found, _hits, _merge, _new_board, _read_on, _short, _update_board, generate, verify)
 
 MAX_ROUNDS = 2  # search rounds (each runs its tool calls in parallel); a third took a multi-part question to ~100 s
 
@@ -24,12 +24,12 @@ MAX_ROUNDS = 2  # search rounds (each runs its tool calls in parallel); a third 
 def _run_tool(job: tuple[dict, float]) -> tuple[dict, list[Chunk]]:
     call, delay = job
     time.sleep(delay)  # free search backends throttle simultaneous web queries from one machine: stagger them
-    query = str(call.get("query") or "").strip()
+    query, part = str(call.get("query") or "").strip(), (str(call["part"]) if call.get("part") else None)
     if call.get("tool") == "search_web":
-        return {"tool": "search_web", "query": query, "depth": None}, web.web_search(query, k=5)
+        return {"tool": "search_web", "query": query, "depth": None, "part": part}, web.web_search(query, k=5)
     depth = "deep" if call.get("depth") == "deep" else "quick"
     found = store.hybrid_search([query], k=MAX_CHUNKS) if depth == "deep" else store.dense_search(query, k=6)
-    return {"tool": "search_documents", "query": query, "depth": depth}, _read_on(found)
+    return {"tool": "search_documents", "query": query, "depth": depth, "part": part}, _read_on(found)
 
 
 def _tier(used: set[str]) -> str:
@@ -44,13 +44,15 @@ def stream_agent(question: str, history: list[BaseMessage] | None = None):
     elapsed = lambda: round(time.monotonic() - start, 1)  # noqa: E731
     docs, history = store.list_documents(), list(history or [])
     evidence: list[Chunk] = []
+    board: list[dict] = []
     log, trace, used = [], [], set()
     feedback, attempts, answer, cits, verified, search_rounds = "", 0, "", [], False, 0
 
     def final(tier: str) -> tuple[str, dict]:
         logger.info("agent answer: tier=%s citations=%d verified=%s", tier, len(cits), verified)
         return "final", {"answer": answer, "rendered": citations.render(answer, cits), "citations": cits,
-                         "tier": tier, "trace": trace, "verified": verified, "seconds": elapsed(), "mode": "agent"}
+                         "tier": tier, "trace": trace, "verified": verified, "seconds": elapsed(), "mode": "agent",
+                         "parts": board}
 
     try:
         for rnd in range(1, MAX_ROUNDS + 3):  # search rounds + an answer round + one retry round
@@ -60,15 +62,20 @@ def stream_agent(question: str, history: list[BaseMessage] | None = None):
                 or "(none)",
                 documents="\n".join(f"- {x['name']}: {_short(x['description'] or 'no description', 200)}"
                                     for x in docs[:30]) or "(none)",
-                question=question, log="\n".join(log) or "(none yet)", evidence=_evidence(evidence) or "(none yet)",
+                question=question, parts=_board_text(board), log="\n".join(log) or "(none yet)",
+                evidence=_evidence(evidence) or "(none yet)",
                 feedback=f"\nYour previous answer failed citation checking:\n{feedback}\nFix it: copy quotes exactly "
                          f"from the evidence, cite other passages, or drop the claim.\n" if feedback else "",
                 rounds_left=searches_left))
             thought = str(d.get("thought") or "")
-            yield "step", {"node": "think", "round": rnd, "summary": thought, "t": elapsed()}
+            knowledge = bool(d.get("knowledge_answer")) and not evidence
+            board = _update_board(board or _new_board(d.get("parts"), question), d.get("parts"), evidence)
+            if knowledge:
+                board = [p | {"status": "found", "note": "From general knowledge"} for p in board]
+            yield "step", {"node": "think", "round": rnd, "summary": thought, "parts": board, "t": elapsed()}
             trace.append(f"Round {rnd} · think: {thought}")
 
-            if d.get("knowledge_answer") and not evidence:
+            if knowledge:
                 answer = KNOWLEDGE_NOTE + str(d["knowledge_answer"])
                 yield final("knowledge")
                 return
@@ -93,7 +100,9 @@ def stream_agent(question: str, history: list[BaseMessage] | None = None):
                 continue
 
             if not d.get("answer") and evidence:  # still asking to search with no rounds left: write it ourselves
-                d = generate({"evidence": evidence, "standalone": question, "attempts": attempts, "feedback": ""})
+                d = generate({"evidence": evidence, "standalone": question, "attempts": attempts, "feedback": "",
+                              "board": board})
+                board = d["board"]
             attempts += 1
             answer = str(d.get("answer") or "") or NO_EVIDENCE
             cits = [{"n": int(c.get("n") or 0), "source_id": str(c.get("source_id") or ""),

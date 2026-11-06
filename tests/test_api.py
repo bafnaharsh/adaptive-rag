@@ -94,4 +94,4 @@ def test_stream_sends_steps_then_final_and_logs_the_turn(client, monkeypatch):
 
 def test_info(client):
     web = "tavily" if settings.TAVILY_API_KEY else "duckduckgo"
-    assert client.get("/rag/info").json() == {"llm": settings.LLM_MODEL, "web": web, "modes": ["ladder", "agent"]}
+    assert client.get("/rag/info").json() == {"llm": settings.LLM_MODEL, "web": web, "modes": ["ladder", "agent"], "board": True}

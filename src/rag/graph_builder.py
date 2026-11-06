@@ -91,13 +91,58 @@ def plan(s: State) -> dict:
     if route == "documents" and not docs:
         route = "web"
         trace.append("No documents indexed → web")
-    out = {"route": route, "standalone": standalone, "trace": trace,
+    board = _new_board(d.get("parts"), standalone)
+    if route == "knowledge":
+        board = [p | {"status": "found", "note": "From general knowledge"} for p in board]
+    out = {"route": route, "standalone": standalone, "trace": trace, "board": board,
            "step": {"node": "plan", "route": route, "reasoning": str(d.get("reasoning", "")), "standalone": standalone,
-                    "summary": str(d.get("summary") or ""),
+                    "summary": str(d.get("summary") or ""), "parts": board,
                     "note": "No documents indexed → web" if route == "web" and d.get("route") == "documents" else None}}
     if route == "knowledge":
         out |= {"tier": "knowledge", "answer": KNOWLEDGE_NOTE + str(d["answer"])}
     return out
+
+
+STATUSES = ("pending", "found", "partial", "missing")
+
+
+def _new_board(parts, question: str) -> list[dict]:
+    """The research board the UI renders: the question split by the model into 1-4 plainly labelled parts."""
+    labels = [str(p.get("label")).strip() for p in parts or [] if isinstance(p, dict) and str(p.get("label") or "").strip()]
+    return [{"id": f"p{i}", "label": _short(label, 80), "status": "pending", "note": "", "sources": []}
+            for i, label in enumerate(labels[:4] or [question], 1)]
+
+
+def _update_board(board: list[dict], verdicts, evidence: list[Chunk]) -> list[dict]:
+    """Merge a model's per-part verdicts into the board; source ids become UI hits (ids not in the evidence are
+    dropped, so a part can only point at what was really retrieved)."""
+    by_id = {c.id: c for c in evidence}
+    new = {str(v.get("id")): v for v in verdicts or [] if isinstance(v, dict)}
+    out = []
+    for part in board:
+        v = new.get(part["id"])
+        if v and v.get("status") in STATUSES:
+            sources = [by_id[i] for i in dict.fromkeys(v.get("sources") or []) if isinstance(i, str) and i in by_id]
+            part = part | {"status": v["status"], "note": _short(v.get("note") or "", 120), "sources": _hits(sources)}
+        out.append(part)
+    return out
+
+
+def _board_text(board: list[dict]) -> str:
+    return "\n".join(f"- {p['id']}: {p['label']} ({p['status']})" for p in board) or "(not split yet)"
+
+
+def _searches(items) -> list[dict]:
+    """A judge's queries, as plain strings or {"part", "query"}, normalised to [{"part": id | None, "query"}]."""
+    out = []
+    for q in items or []:
+        if isinstance(q, dict):
+            part, q = (str(q["part"]) if q.get("part") else None), q.get("query")
+        else:
+            part = None
+        if isinstance(q, str) and q.strip():
+            out.append({"part": part, "query": q.strip()})
+    return out[:3]
 
 
 def _parse_answer(d: dict) -> tuple[str, list[dict]]:
@@ -113,16 +158,20 @@ def _hits(chunks: list[Chunk]) -> list[dict]:
              "snippet": _short(c.text, 240), "url": c.source if c.id.startswith("web:") else None} for c in chunks]
 
 
-def _judge(s: State, tier: str, head: str, found: list[Chunk], queries: list[str]) -> dict:
-    old = s.get("evidence", [])
+def _judge(s: State, tier: str, head: str, found: list[Chunk], searches: list[dict]) -> dict:
+    old, board = s.get("evidence", []), s.get("board", [])
     new = len({c.id for c in found} - {c.id for c in old})
-    step = {"node": tier, "queries": queries, "chunks": _hits(found), "new": new}
+    step = {"node": tier, "queries": [x["query"] for x in searches], "searches": searches, "chunks": _hits(found),
+            "new": new}
     if not new:  # nothing new: judging the same evidence again is wasted
+        pending = s.get("doc_queries", []) + s.get("web_queries", [])
         return {"tier": tier, "sufficient": False, "trace": [f"{head} → nothing new → escalate"],
-                "step": step | {"verdict": "nothing new", "reasoning": "", "missing": "",
-                                "next_queries": s.get("doc_queries", []) + s.get("web_queries", [])}}
+                "step": step | {"verdict": "nothing new", "reasoning": "", "missing": "", "parts": board,
+                                "next_queries": [q["query"] for q in pending]}}
     evidence = _merge(found, old)
-    d = llm.ask_json(PROMPTS.prompt("judge").format(question=s["standalone"], evidence=_evidence(evidence)))
+    d = llm.ask_json(PROMPTS.prompt("judge").format(question=s["standalone"], parts=_board_text(board),
+                                                    evidence=_evidence(evidence)))
+    board = _update_board(board, d.get("parts"), evidence)
     labels = {c.id: f"[{c.label()}]" for c in evidence}  # the judge names sources by id; people read "file, p. 5"
     d["reasoning"] = re.sub(r"\b(?:doc|web):\w+", lambda m: labels.get(m.group().lower(), m.group()),
                             str(d.get("reasoning", "")), flags=re.I)
@@ -131,22 +180,22 @@ def _judge(s: State, tier: str, head: str, found: list[Chunk], queries: list[str
     # round trip); verify then checks it like any other, and a failed check retries through generate.
     answered = ok and bool(str(d.get("answer") or "").strip())
     drafted = dict(zip(("answer", "citations"), _parse_answer(d))) | {"attempts": 1} if answered else {}
-    doc_q, web_q =([q for q in d.get(key) or [] if isinstance(q, str) and q.strip()][:3]
-                    for key in ("search_documents", "search_web"))
+    doc_q, web_q = _searches(d.get("search_documents")), _searches(d.get("search_web"))
     verdict = "sufficient" if ok else f"insufficient — {d.get('missing') or 'more evidence needed'}"
     if not ok:
-        verdict += f" → next: documents {doc_q}, web {web_q}"
+        verdict += f" → next: documents {[q['query'] for q in doc_q]}, web {[q['query'] for q in web_q]}"
         if tier == "rag" and web_q and not doc_q:
             verdict += " (the documents don't cover the rest: skip the deeper document search)"
     trace = [f"{head} → judge: {verdict}", f"Reasoning: {d.get('reasoning', '')}"]
     if answered:
         trace.append(f"Generate (with the judge): {len(drafted['citations'])} citations")
     return {"tier": tier, "evidence": evidence, "sufficient": ok, "doc_queries": doc_q, "web_queries": web_q,
-            "answered": answered, **drafted, "trace": trace,
+            "answered": answered, "board": board, **drafted, "trace": trace,
             "step": step | {"verdict": "sufficient" if ok else "insufficient", "reasoning": str(d.get("reasoning", "")),
-                            "summary": str(d.get("summary") or ""),
+                            "summary": str(d.get("summary") or ""), "parts": board,
                             "look_next": None if ok else ("documents" if doc_q or not web_q else "web"),
-                            "missing": "" if ok else str(d.get("missing") or ""), "next_queries": doc_q + web_q}}
+                            "missing": "" if ok else str(d.get("missing") or ""),
+                            "next_queries": [q["query"] for q in doc_q + web_q]}}
 
 
 def _read_on(found: list[Chunk]) -> list[Chunk]:
@@ -165,32 +214,37 @@ def _read_on(found: list[Chunk]) -> list[Chunk]:
 
 def rag(s: State) -> dict:
     found = _read_on(store.dense_search(s["standalone"], k=6))
-    return _judge(s, "rag", f"Tier 1 · RAG (dense): {_found(found)}", found, [s["standalone"]])
+    searches = [{"part": None, "query": s["standalone"], "kind": "quick"}]
+    return _judge(s, "rag", f"Tier 1 · RAG (dense): {_found(found)}", found, searches)
 
 
 def hybrid(s: State) -> dict:
-    queries = [s["standalone"], *s.get("doc_queries", [])]
+    searches = [{"part": None, "query": s["standalone"], "kind": "deep"}] + [
+        q | {"kind": "deep"} for q in s.get("doc_queries", [])]
+    queries = [x["query"] for x in searches]
     found = _read_on(store.hybrid_search(queries, k=MAX_CHUNKS))  # whole budget: answers in tables rank ~9th-10th
     head = f"Tier 2 · Hybrid (BM25+dense, reranked): {len(queries)} queries ({' | '.join(queries)}) → {_found(found)}"
-    return _judge(s, "hybrid", head, found, queries)
+    return _judge(s, "hybrid", head, found, searches)
 
 
 def web_tier(s: State) -> dict:
     # The judge's top two web queries, searched in parallel: a multi-part question ("MP of the cameras, who makes them,
     # how to replace them") has its missing parts spread over different queries.
-    queries = (s.get("web_queries") or s.get("doc_queries") or [s["standalone"]])[:2]
+    searches = (s.get("web_queries") or s.get("doc_queries") or [{"part": None, "query": s["standalone"]}])[:2]
 
     def search(i_q):
         i, q = i_q
         time.sleep(2 * i)  # free search backends throttle simultaneous queries from one machine: stagger them
-        return web.web_search(q, k=5)
+        return web.web_search(q["query"], k=5)
 
-    with ThreadPoolExecutor(len(queries)) as pool:
-        results = list(pool.map(search, enumerate(queries)))
+    with ThreadPoolExecutor(len(searches)) as pool:
+        results = list(pool.map(search, enumerate(searches)))
     found = list({c.id: c for c in itertools.chain(*itertools.zip_longest(*results)) if c}.values())  # interleaved
+    queries = [q["query"] for q in searches]
     return {"tier": "web", "evidence": _merge(found, s.get("evidence", [])),
             "trace": [f"Tier 3 · Web: {' | '.join(f'“{q}”' for q in queries)} → {_found(found)}"],
-            "step": {"node": "web", "query": " | ".join(queries), "chunks": _hits(found)}}
+            "step": {"node": "web", "query": " | ".join(queries), "chunks": _hits(found),
+                     "searches": [q | {"kind": "web", "chunks": _hits(r)} for q, r in zip(searches, results)]}}
 
 
 def generate(s: State) -> dict:
@@ -199,16 +253,20 @@ def generate(s: State) -> dict:
     if not evidence:
         return {"answer": NO_EVIDENCE, "citations": [], "attempts": attempts, "trace": ["Generate: no evidence"],
                 "step": step | {"citations": 0}}
-    prompt = PROMPTS.prompt("generate").format(question=s["standalone"], evidence=_evidence(evidence))
+    board = s.get("board", [])
+    prompt = PROMPTS.prompt("generate").format(question=s["standalone"], parts=_board_text(board),
+                                               evidence=_evidence(evidence))
     if feedback:
         previous = {"answer": s["answer"],
                     "citations": [{k: c[k] for k in ("n", "source_id", "quote")} for c in s["citations"]]}
         prompt += "\n\n" + PROMPTS.prompt("regenerate").format(
             problems=feedback, previous=json.dumps(previous, ensure_ascii=False))
-    answer, cits = _parse_answer(llm.ask_json(prompt))
-    return {"answer": answer, "citations": cits, "attempts": attempts,
+    d = llm.ask_json(prompt)
+    answer, cits = _parse_answer(d)
+    board = _update_board(board, d.get("parts"), evidence)  # the writer's final word on what each part got
+    return {"answer": answer, "citations": cits, "attempts": attempts, "board": board,
             "trace": [f"Generate{' (retry with verification feedback)' if feedback else ''}: {len(cits)} citations"],
-            "step": step | {"citations": len(cits)}}
+            "step": step | {"citations": len(cits), "parts": board}}
 
 
 def verify(s: State) -> dict:
@@ -286,10 +344,11 @@ def stream_answer(question: str, history: list[BaseMessage] | None = None):
         msg = f"Sorry, I could not answer this question ({error})."
         yield "final", {"answer": msg, "rendered": msg, "citations": [], "tier": state.get("tier", "knowledge"),
                         "trace": state.get("trace", []) + [f"Error: {error}"], "verified": False,
-                        "seconds": round(time.monotonic() - start, 1)}
+                        "parts": state.get("board", []), "seconds": round(time.monotonic() - start, 1)}
         return
     cits = state.get("citations", [])
     logger.info("answer: tier=%s citations=%d verified=%s", state["tier"], len(cits), state.get("verified", False))
     yield "final", {"answer": state["answer"], "rendered": citations.render(state["answer"], cits), "citations": cits,
+                    "parts": state.get("board", []),
                     "tier": state["tier"], "trace": state["trace"], "verified": state.get("verified", False),
                     "seconds": round(time.monotonic() - start, 1)}

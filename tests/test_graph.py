@@ -218,6 +218,31 @@ def test_mixed_question_routes_each_missing_part_and_keeps_both_sources(env):
     assert 'id="web:' in evidence and 'id="doc:' in evidence
 
 
+def test_research_board_tracks_each_part_and_tags_searches(env):
+    parts = [{"id": "p1", "label": "Battery life in hours"}, {"id": "p2", "label": "How it compares to iPhone 17"}]
+    env.replies |= {
+        "plan": [plan("documents") | {"parts": parts}],
+        "judge": [judge(False) | {"parts": [{"id": "p1", "status": "found", "note": "Up to 20 hours", "sources": ["doc:1", "doc:999"]},
+                                            {"id": "p2", "status": "missing", "note": "", "sources": []}],
+                                  "search_web": [{"part": "p2", "query": "iPhone 17 battery life hours"}]}],
+        "generate": [WEB_GOOD | {"parts": [{"id": "p2", "status": "found", "note": "30 hours", "sources": ["web:ab12"]}]}]}
+    events = list(graph_builder.stream_answer(Q))
+    steps = {d["node"]: d for kind, d in events if kind == "step"}
+    assert [p["status"] for p in steps["plan"]["parts"]] == ["pending", "pending"]
+    assert steps["rag"]["searches"] == [{"part": None, "query": Q, "kind": "quick"}]
+    p1 = steps["rag"]["parts"][0]
+    assert p1["status"] == "found" and [s["id"] for s in p1["sources"]] == ["doc:1"]  # unknown id dropped
+    assert steps["web"]["searches"][0]["part"] == "p2" and steps["web"]["searches"][0]["chunks"][0]["id"] == "web:ab12"
+    final = events[-1][1]
+    assert [(p["id"], p["status"]) for p in final["parts"]] == [("p1", "found"), ("p2", "found")]
+
+
+def test_board_falls_back_to_the_whole_question(env):
+    env.replies |= {"plan": [plan("documents")], "judge": [judge(True)], "generate": [GOOD]}
+    final = graph_builder.answer(Q)
+    assert [(p["id"], p["label"], p["status"]) for p in final["parts"]] == [("p1", Q, "pending")]
+
+
 def test_stream_answer_emits_one_step_per_node_then_final(env):
     env.replies |= {"plan": [plan("documents")], "judge": [judge(False, "iPhone battery hours"), judge(True)],
                     "generate": [gen("doc:3", "streamed video playback lasts up to 16 hours")]}

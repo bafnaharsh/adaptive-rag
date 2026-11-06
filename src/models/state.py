@@ -21,8 +21,9 @@ class State(TypedDict, total=False):
     evidence: list[Chunk]        # merged across tiers, best first
     sufficient: bool             # the judge's verdict on the evidence so far
     answered: bool               # the judge also wrote the answer (sufficient evidence): skip generate
-    doc_queries: list[str]       # the judge's queries for missing parts the documents likely cover (Tier 2)
-    web_queries: list[str]       # the judge's queries for missing parts only the web has (Tier 3)
+    doc_queries: list[dict]      # judge's {"part", "query"} for missing parts the documents likely cover (Tier 2)
+    web_queries: list[dict]      # judge's {"part", "query"} for missing parts only the web has (Tier 3)
+    board: list[dict]            # research board: [{id, label, status, note, sources}] streamed to the UI
     answer: str
     citations: list[dict]        # generate's citations, replaced by citations.verify() output
     feedback: str                # verification failures sent back to generate; "" when done

@@ -76,7 +76,7 @@ async def rag_query_stream(req: QueryRequest):
 @router.get("/rag/info")
 async def info():
     return {"llm": settings.LLM_MODEL, "web": "tavily" if settings.TAVILY_API_KEY else "duckduckgo",
-            "modes": ["ladder", "agent"]}
+            "modes": ["ladder", "agent"], "board": True}
 
 
 @router.post("/rag/documents/upload")
